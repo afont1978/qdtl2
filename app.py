@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -14,12 +13,12 @@ import streamlit as st
 
 from mobility_runtime import MobilityRuntime
 
-st.set_page_config(page_title="Barcelona Mobility Control Room v3", layout="wide")
+st.set_page_config(page_title="Barcelona Mobility Control Room v4", layout="wide")
 
 st.markdown(
     """
     <style>
-    .block-container {max-width: 1640px; padding-top: 1rem; padding-bottom: 1.2rem;}
+    .block-container {max-width: 1660px; padding-top: 1rem; padding-bottom: 1.2rem;}
     .hero {padding: 1rem 1.2rem; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px;
            background: linear-gradient(135deg, rgba(18,28,45,0.96), rgba(8,13,24,0.96)); margin-bottom: 1rem;}
     .hero-title {font-size: 2rem; font-weight: 700; color: #F4F7FB; margin-bottom: 0.2rem;}
@@ -28,6 +27,8 @@ st.markdown(
                   border: 1px solid rgba(255,255,255,0.06);}
     .section-card {padding: 0.85rem 1rem; border-radius: 16px; background: rgba(255,255,255,0.03);
                    border: 1px solid rgba(255,255,255,0.06);}
+    .sim-note {padding: 0.8rem 1rem; border-radius: 14px; background: rgba(130,160,255,0.08);
+               border: 1px solid rgba(130,160,255,0.18);}
     </style>
     """,
     unsafe_allow_html=True,
@@ -65,6 +66,23 @@ LAYER_COLORS = {
 }
 DATA_PATH = Path(__file__).with_name("barcelona_mobility_hotspots.csv")
 
+METRIC_LABELS = {
+    "network_speed_index": "Network speed",
+    "corridor_reliability_index": "Corridor reliability",
+    "corridor_delay_s": "Corridor delay [s]",
+    "bus_bunching_index": "Bus bunching",
+    "bus_commercial_speed_kmh": "Bus commercial speed [km/h]",
+    "curb_occupancy_rate": "Curb occupancy",
+    "illegal_curb_occupancy_rate": "Illegal curb occupancy",
+    "delivery_queue": "Delivery queue",
+    "risk_score": "Risk score",
+    "near_miss_index": "Near-miss index",
+    "pedestrian_exposure": "Pedestrian exposure",
+    "bike_conflict_index": "Bike conflict index",
+    "gateway_delay_index": "Gateway delay",
+    "step_operational_score": "Operational score",
+}
+
 
 def init_state() -> None:
     ss = st.session_state
@@ -75,12 +93,7 @@ def init_state() -> None:
     ss.setdefault("sleep_s", 0.25)
     ss.setdefault("live_window", 36)
     ss.setdefault("twin_sel", "intersection")
-    ss.setdefault("map_layers", [
-        "Intermodal / public transport",
-        "Urban core / tourism",
-        "Logistics / curb / port",
-        "Airport / gateway",
-    ])
+    ss.setdefault("map_layers", list(LAYER_COLORS.keys()))
     ss.setdefault("focus_hotspot_mode", "Auto (scenario hotspot)")
     ss.setdefault("rt", MobilityRuntime(scenario=ss["scenario"], seed=int(ss["seed"])))
 
@@ -283,6 +296,139 @@ def twin_snapshot_fields(snapshot: dict) -> list[tuple[str, Any]]:
     return rows[:12]
 
 
+def project_what_if(latest: Dict[str, Any], focused_name: str | None, controls: Dict[str, Any]) -> Dict[str, Any]:
+    if not latest:
+        return {}
+
+    proj = dict(latest)
+    shock = controls.get("shock", "None")
+    bus_priority = int(controls.get("bus_priority", 0))
+    enforcement = int(controls.get("enforcement", 0))
+    ped_protection = bool(controls.get("ped_protection", False))
+    diversion = bool(controls.get("diversion", False))
+
+    # baseline values
+    nsi = float(proj.get("network_speed_index", 0.0))
+    cri = float(proj.get("corridor_reliability_index", 0.0))
+    cds = float(proj.get("corridor_delay_s", 0.0))
+    bbi = float(proj.get("bus_bunching_index", 0.0))
+    bcs = float(proj.get("bus_commercial_speed_kmh", 0.0))
+    cor = float(proj.get("curb_occupancy_rate", 0.0))
+    icor = float(proj.get("illegal_curb_occupancy_rate", 0.0))
+    dq = float(proj.get("delivery_queue", 0.0))
+    rs = float(proj.get("risk_score", 0.0))
+    nm = float(proj.get("near_miss_index", 0.0))
+    pe = float(proj.get("pedestrian_exposure", 0.0))
+    bc = float(proj.get("bike_conflict_index", 0.0))
+    gd = float(proj.get("gateway_delay_index", 0.0))
+
+    # shocks
+    if shock == "Rain event":
+        nsi -= 0.08; cri -= 0.06; cds += 8; bbi += 0.03; rs += 0.08; nm += 0.05; bc += 0.04
+    elif shock == "Incident on corridor":
+        nsi -= 0.15; cri -= 0.14; cds += 18; bbi += 0.06; rs += 0.10; gd += 0.07
+    elif shock == "Delivery wave":
+        cor += 0.10; icor += 0.08; dq += 4; rs += 0.03
+    elif shock == "Gateway surge":
+        gd += 0.16; nsi -= 0.06; cri -= 0.05; cds += 7
+    elif shock == "Event release":
+        nsi -= 0.10; cri -= 0.08; cds += 10; bbi += 0.05; gd += 0.08; pe += 0.07
+    elif shock == "School peak":
+        rs += 0.10; nm += 0.06; pe += 0.10; bc += 0.03
+
+    # interventions
+    if bus_priority > 0:
+        nsi += 0.02 * bus_priority
+        cri += 0.03 * bus_priority
+        cds -= 2.5 * bus_priority
+        bbi -= 0.05 * bus_priority
+        bcs += 0.8 * bus_priority
+
+    if enforcement > 0:
+        cor -= 0.02 * enforcement
+        icor -= 0.08 * enforcement
+        dq -= 1.2 * enforcement
+        rs -= 0.01 * enforcement
+
+    if ped_protection:
+        rs -= 0.07
+        nm -= 0.05
+        pe -= 0.04
+        nsi -= 0.02
+        cds += 2.5
+
+    if diversion:
+        nsi += 0.05
+        cri += 0.04
+        cds -= 4.0
+        gd -= 0.03
+        cor += 0.02
+
+    # clamp values
+    proj["network_speed_index"] = float(max(0.0, min(1.3, nsi)))
+    proj["corridor_reliability_index"] = float(max(0.0, min(1.3, cri)))
+    proj["corridor_delay_s"] = float(max(0.0, cds))
+    proj["bus_bunching_index"] = float(max(0.0, min(1.0, bbi)))
+    proj["bus_commercial_speed_kmh"] = float(max(5.0, min(30.0, bcs)))
+    proj["curb_occupancy_rate"] = float(max(0.0, min(1.0, cor)))
+    proj["illegal_curb_occupancy_rate"] = float(max(0.0, min(1.0, icor)))
+    proj["delivery_queue"] = float(max(0.0, dq))
+    proj["risk_score"] = float(max(0.0, min(1.0, rs)))
+    proj["near_miss_index"] = float(max(0.0, min(1.0, nm)))
+    proj["pedestrian_exposure"] = float(max(0.0, min(1.0, pe)))
+    proj["bike_conflict_index"] = float(max(0.0, min(1.0, bc)))
+    proj["gateway_delay_index"] = float(max(0.0, min(1.0, gd)))
+
+    step_score = (
+        0.30 * proj["network_speed_index"]
+        + 0.20 * proj["corridor_reliability_index"]
+        + 0.15 * (1.0 - proj["bus_bunching_index"])
+        + 0.15 * (1.0 - (0.55 * proj["curb_occupancy_rate"] + 0.45 * proj["illegal_curb_occupancy_rate"]))
+        + 0.20 * (1.0 - proj["risk_score"])
+    )
+    proj["step_operational_score"] = float(step_score)
+    proj["primary_hotspot_name"] = focused_name or proj.get("primary_hotspot_name")
+
+    # contextual route suggestion
+    route = "CLASSICAL"
+    reason = "Classical intervention package remains sufficient for this hotspot."
+    subproblem = "local_control_problem"
+    complexity = 4.8
+    if shock in {"Delivery wave", "Gateway surge", "Event release"} or (bus_priority >= 2 and enforcement >= 1) or (diversion and shock == "Incident on corridor"):
+        route = "QUANTUM"
+        reason = "Hybrid route suggested because the hotspot combines several discrete interventions with competing objectives."
+        subproblem = "multimodal_redispatch_problem"
+        complexity = 6.0
+    if shock in {"School peak", "Rain event"} and ped_protection:
+        route = "CLASSICAL"
+        reason = "Classical route preferred because the package is safety-critical and latency sensitive."
+        subproblem = "safety_protection_problem"
+        complexity = 5.2
+
+    proj["what_if_route"] = route
+    proj["what_if_reason"] = reason
+    proj["what_if_subproblem"] = subproblem
+    proj["what_if_complexity"] = complexity
+    proj["what_if_shock"] = shock
+    return proj
+
+
+def metric_delta_rows(before: Dict[str, Any], after: Dict[str, Any], keys: list[str]) -> pd.DataFrame:
+    rows = []
+    for k in keys:
+        b = before.get(k)
+        a = after.get(k)
+        if b is None or a is None:
+            continue
+        rows.append({
+            "Metric": METRIC_LABELS.get(k, k),
+            "Baseline": round(float(b), 4),
+            "Projected": round(float(a), 4),
+            "Delta": round(float(a) - float(b), 4),
+        })
+    return pd.DataFrame(rows)
+
+
 init_state()
 ss = st.session_state
 hotspots_df = load_hotspots()
@@ -357,7 +503,7 @@ st.markdown(
     """
     <div class="hero">
       <div class="hero-title">Barcelona Mobility Control Room</div>
-      <div class="hero-subtitle">Version 3 — central layered map, direct hotspot focus and clearer navigation between overview, twins, risk and audit.</div>
+      <div class="hero-subtitle">Version 4 — central layered map plus contextual what-if simulation anchored to the selected hotspot.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -395,11 +541,12 @@ else:
     st.info("No simulation data yet. Press Step or Start.")
 
 
-tab_overview, tab_map, tab_twins, tab_risk, tab_audit = st.tabs([
+tab_overview, tab_map, tab_twins, tab_risk, tab_sim, tab_audit = st.tabs([
     "Overview",
     "Map & Layers",
     "Mobility Twins",
     "Risk & Prevention",
+    "What-if & Simulation",
     "Audit & Orchestration",
 ])
 
@@ -499,6 +646,93 @@ with tab_risk:
         with bottom[1]:
             show_cols = [c for c in ["step_id", "active_event", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "decision_route"] if c in live_df.columns]
             st.dataframe(live_df[show_cols].tail(12), use_container_width=True)
+
+with tab_sim:
+    st.markdown("## What-if & Simulation")
+    if df.empty:
+        st.info("Run at least one step before launching a contextual what-if analysis.")
+    else:
+        details = hotspot_details(focus_name, hotspots_df)
+        left, right = st.columns([1.0, 1.2])
+        with left:
+            render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Simulation focus")
+            st.markdown('<div class="sim-note">', unsafe_allow_html=True)
+            st.markdown("**Goal**")
+            st.write("Build a quick before / after estimate for the selected hotspot without changing the running simulation.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            with st.form("what_if_form"):
+                shock = st.selectbox(
+                    "Stress or context change",
+                    ["None", "Rain event", "Incident on corridor", "Delivery wave", "Gateway surge", "Event release", "School peak"],
+                    index=0,
+                )
+                bus_priority = st.slider("Increase bus priority", 0, 2, 1)
+                enforcement = st.slider("Increase curbside enforcement", 0, 2, 0)
+                ped_protection = st.checkbox("Activate pedestrian protection", value=False)
+                diversion = st.checkbox("Activate diversion / re-routing", value=False)
+                simulate = st.form_submit_button("Run what-if on focused hotspot", use_container_width=True)
+
+        if "what_if_controls" not in ss:
+            ss["what_if_controls"] = {
+                "shock": "None",
+                "bus_priority": 1,
+                "enforcement": 0,
+                "ped_protection": False,
+                "diversion": False,
+            }
+        if simulate:
+            ss["what_if_controls"] = {
+                "shock": shock,
+                "bus_priority": bus_priority,
+                "enforcement": enforcement,
+                "ped_protection": ped_protection,
+                "diversion": diversion,
+            }
+
+        projected = project_what_if(latest, focus_name, ss["what_if_controls"])
+        with right:
+            delta_df = metric_delta_rows(
+                latest,
+                projected,
+                [
+                    "network_speed_index", "corridor_reliability_index", "corridor_delay_s",
+                    "bus_bunching_index", "bus_commercial_speed_kmh",
+                    "curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue",
+                    "risk_score", "near_miss_index", "pedestrian_exposure",
+                    "gateway_delay_index", "step_operational_score",
+                ],
+            )
+            top = st.columns(3)
+            with top[0]:
+                kpi_block("Projected route", ROUTE_LABELS.get(projected.get("what_if_route", "CLASSICAL"), "Classical"))
+            with top[1]:
+                delta_score = projected.get("step_operational_score", 0.0) - latest.get("step_operational_score", 0.0)
+                kpi_block("Δ operational score", f"{delta_score:+.3f}")
+            with top[2]:
+                kpi_block("Subproblem", projected.get("what_if_subproblem", "—"))
+
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown("### What-if interpretation")
+            st.write(projected.get("what_if_reason", "No explanation available."))
+            st.write(f"**Shock:** {projected.get('what_if_shock', 'None')}")
+            st.write(f"**Focused hotspot:** {projected.get('primary_hotspot_name', focus_name or '—')}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.markdown("### Before / after")
+            st.dataframe(delta_df, use_container_width=True, hide_index=True, height=420)
+
+            compare_df = pd.DataFrame({
+                "State": ["Baseline", "Projected"],
+                "Operational score": [latest.get("step_operational_score", 0.0), projected.get("step_operational_score", 0.0)],
+                "Risk": [latest.get("risk_score", 0.0), projected.get("risk_score", 0.0)],
+                "Network speed": [latest.get("network_speed_index", 0.0), projected.get("network_speed_index", 0.0)],
+            })
+            fig = go.Figure()
+            for metric in ["Operational score", "Risk", "Network speed"]:
+                fig.add_trace(go.Bar(x=compare_df["State"], y=compare_df[metric], name=metric))
+            fig.update_layout(template="plotly_dark", title="Scenario comparison", height=320, margin=dict(l=20, r=20, t=50, b=20), barmode="group")
+            st.plotly_chart(fig, use_container_width=True)
 
 with tab_audit:
     if df.empty:
