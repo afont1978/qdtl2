@@ -1,21 +1,20 @@
-# Barcelona Mobility Control Room
+# Barcelona Mobility Control Room — V2
 
-Clean starter repository for a separate project focused on a hybrid quantum-classical urban mobility control room for Barcelona.
+This is a clean V2 prototype for a Barcelona-focused urban mobility control room.
 
-## Included
-- `app.py`: Streamlit UI with stable scenario switching
-- `mobility_runtime.py`: mobility runtime anchored to Barcelona hotspots
-- `barcelona_mobility_hotspots.csv`: hotspot dataset used by the runtime
-- `requirements.txt`
-- `.streamlit/config.toml`
-- `.gitignore`
+It includes:
+- a central geolocated city map,
+- real Barcelona hotspots loaded from CSV,
+- a synthetic mobility runtime with classical / quantum / fallback routing,
+- stable scenario switching,
+- cleaner operator views for twins, risk and audit.
 
-## Run locally
+## Files
+- `app.py`: Streamlit UI
+- `mobility_runtime.py`: synthetic city runtime
+- `barcelona_mobility_hotspots.csv`: hotspot catalogue
+
+## Run
 ```bash
-python -m pip install -r requirements.txt
-python -m streamlit run app.py
+streamlit run app.py
 ```
-
-## Notes
-- Keep `barcelona_mobility_hotspots.csv` in the repo root next to `mobility_runtime.py`.
-- This package is intentionally minimal so it can be used as a new standalone repository.
