@@ -1,20 +1,15 @@
-# Barcelona Mobility Control Room — V2
+# Barcelona Mobility Control Room v3
 
-This is a clean V2 prototype for a Barcelona-focused urban mobility control room.
+Version 3 of the Barcelona mobility prototype with:
+- central layered map
+- hotspot focus selector
+- real Barcelona hotspots from CSV
+- stable scenario switching via form
+- clearer navigation between overview, twins, risk and audit
 
-It includes:
-- a central geolocated city map,
-- real Barcelona hotspots loaded from CSV,
-- a synthetic mobility runtime with classical / quantum / fallback routing,
-- stable scenario switching,
-- cleaner operator views for twins, risk and audit.
+## Run locally
 
-## Files
-- `app.py`: Streamlit UI
-- `mobility_runtime.py`: synthetic city runtime
-- `barcelona_mobility_hotspots.csv`: hotspot catalogue
-
-## Run
 ```bash
+python -m pip install -r requirements.txt
 streamlit run app.py
 ```

@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import json
@@ -13,21 +14,20 @@ import streamlit as st
 
 from mobility_runtime import MobilityRuntime
 
-st.set_page_config(page_title="Barcelona Mobility Control Room", layout="wide")
+st.set_page_config(page_title="Barcelona Mobility Control Room v3", layout="wide")
 
 st.markdown(
     """
     <style>
-    .block-container {max-width: 1600px; padding-top: 1rem; padding-bottom: 1.5rem;}
+    .block-container {max-width: 1640px; padding-top: 1rem; padding-bottom: 1.2rem;}
     .hero {padding: 1rem 1.2rem; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px;
-           background: linear-gradient(135deg, rgba(20,30,48,0.96), rgba(9,14,28,0.96)); margin-bottom: 1rem;}
+           background: linear-gradient(135deg, rgba(18,28,45,0.96), rgba(8,13,24,0.96)); margin-bottom: 1rem;}
     .hero-title {font-size: 2rem; font-weight: 700; color: #F4F7FB; margin-bottom: 0.2rem;}
     .hero-subtitle {font-size: 1rem; color: #C7D0DD;}
     .metric-card {padding: 0.75rem 0.95rem; border-radius: 16px; background: rgba(255,255,255,0.03);
                   border: 1px solid rgba(255,255,255,0.06);}
     .section-card {padding: 0.85rem 1rem; border-radius: 16px; background: rgba(255,255,255,0.03);
                    border: 1px solid rgba(255,255,255,0.06);}
-    .small-muted {color:#A8B5C7; font-size:0.9rem;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -57,6 +57,12 @@ ROUTE_COLORS = {
     "QUANTUM": "#9C6ADE",
     "FALLBACK_CLASSICAL": "#F28E2B",
 }
+LAYER_COLORS = {
+    "Intermodal / public transport": [55, 126, 184, 170],
+    "Urban core / tourism": [77, 175, 74, 170],
+    "Logistics / curb / port": [255, 127, 0, 170],
+    "Airport / gateway": [152, 78, 163, 170],
+}
 DATA_PATH = Path(__file__).with_name("barcelona_mobility_hotspots.csv")
 
 
@@ -64,13 +70,18 @@ def init_state() -> None:
     ss = st.session_state
     ss.setdefault("scenario", "corridor_congestion")
     ss.setdefault("seed", 42)
-    ss.setdefault("pending_scenario", ss["scenario"])
-    ss.setdefault("pending_seed", int(ss["seed"]))
     ss.setdefault("running", False)
     ss.setdefault("steps_per_run", 1)
     ss.setdefault("sleep_s", 0.25)
     ss.setdefault("live_window", 36)
     ss.setdefault("twin_sel", "intersection")
+    ss.setdefault("map_layers", [
+        "Intermodal / public transport",
+        "Urban core / tourism",
+        "Logistics / curb / port",
+        "Airport / gateway",
+    ])
+    ss.setdefault("focus_hotspot_mode", "Auto (scenario hotspot)")
     ss.setdefault("rt", MobilityRuntime(scenario=ss["scenario"], seed=int(ss["seed"])))
 
 
@@ -103,9 +114,21 @@ def safe_json_loads(text: Any) -> Any:
 def load_hotspots() -> pd.DataFrame:
     try:
         df = pd.read_csv(DATA_PATH)
-        return df
     except Exception:
-        return pd.DataFrame(columns=["name", "lat", "lon", "category", "streets", "why"])
+        return pd.DataFrame(columns=["name", "lat", "lon", "category", "streets", "why", "layer_group"])
+    df["layer_group"] = df["category"].apply(layer_group)
+    return df
+
+
+def layer_group(category: str) -> str:
+    cat = str(category).lower()
+    if "aeroport" in cat or "gateway" in cat:
+        return "Airport / gateway"
+    if "port" in cat or "logístic" in cat or "logistic" in cat or "mercanc" in cat or "curb" in cat:
+        return "Logistics / curb / port"
+    if "intermodal" in cat or "bus" in cat or "metro" in cat or "tranv" in cat:
+        return "Intermodal / public transport"
+    return "Urban core / tourism"
 
 
 def kpi_block(label: str, value: str, delta: str = "") -> None:
@@ -114,27 +137,71 @@ def kpi_block(label: str, value: str, delta: str = "") -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def build_map_df(hotspots_df: pd.DataFrame, latest: Dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def route_counts(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "decision_route" not in df.columns:
+        return pd.DataFrame(columns=["route", "count"])
+    vc = df["decision_route"].value_counts().reset_index()
+    vc.columns = ["route", "count"]
+    return vc
+
+
+def selected_hotspot_name(latest: Dict[str, Any]) -> str | None:
+    mode = st.session_state.get("focus_hotspot_mode", "Auto (scenario hotspot)")
+    if mode == "Auto (scenario hotspot)":
+        return latest.get("primary_hotspot_name") if latest else None
+    return mode
+
+
+def make_line(df: pd.DataFrame, cols: list[str], title: str, y_title: str = "Index") -> go.Figure:
+    fig = go.Figure()
+    for col in cols:
+        if col in df.columns:
+            fig.add_trace(go.Scatter(x=df["step_id"], y=df[col], mode="lines", name=col, line=dict(width=2)))
+    fig.update_layout(
+        title=title,
+        template="plotly_dark",
+        margin=dict(l=20, r=20, t=50, b=20),
+        height=300,
+        xaxis_title="Step",
+        yaxis_title=y_title,
+        legend=dict(orientation="h"),
+    )
+    return fig
+
+
+def make_routes(df: pd.DataFrame) -> go.Figure:
+    rc = route_counts(df)
+    fig = px.bar(rc, x="route", y="count", color="route", color_discrete_map=ROUTE_COLORS, template="plotly_dark", title="Decision mix")
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False)
+    return fig
+
+
+def build_map_data(hotspots_df: pd.DataFrame, latest: Dict[str, Any], layer_filter: list[str], focused_name: str | None) -> tuple[pd.DataFrame, pd.DataFrame]:
     if hotspots_df.empty:
         return pd.DataFrame(), pd.DataFrame()
-    base = hotspots_df.copy()
-    base["color"] = [[70, 130, 180, 160]] * len(base)
-    base["radius"] = 110
-
-    current_name = latest.get("primary_hotspot_name") if latest else None
-    selected_name = latest.get("primary_hotspot_name") if latest else None
-    current = base[base["name"] == current_name].copy() if current_name else pd.DataFrame(columns=base.columns)
+    base = hotspots_df[hotspots_df["layer_group"].isin(layer_filter)].copy()
+    if base.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    base["color"] = base["layer_group"].map(LAYER_COLORS)
+    base["radius"] = 140
+    focus_name = focused_name or (latest.get("primary_hotspot_name") if latest else None)
+    current = base[base["name"] == focus_name].copy() if focus_name else pd.DataFrame(columns=base.columns)
     if not current.empty:
         current["color"] = [[230, 60, 60, 220]] * len(current)
-        current["radius"] = 260
+        current["radius"] = 320
     return base, current
 
 
-def render_city_map(hotspots_df: pd.DataFrame, latest: Dict[str, Any], height: int = 520) -> None:
-    base, current = build_map_df(hotspots_df, latest)
+def render_city_map(hotspots_df: pd.DataFrame, latest: Dict[str, Any], height: int = 520, focused_name: str | None = None) -> None:
+    base, current = build_map_data(hotspots_df, latest, st.session_state.get("map_layers", []), focused_name)
     if base.empty:
-        st.info("No hotspot data available.")
+        st.info("No hotspot data available for the selected layers.")
         return
+
+    center_lat, center_lon, zoom = 41.3851, 2.1734, 11.8
+    if not current.empty:
+        row = current.iloc[0]
+        center_lat, center_lon, zoom = float(row["lat"]), float(row["lon"]), 12.7
 
     layers = [
         pdk.Layer(
@@ -160,11 +227,10 @@ def render_city_map(hotspots_df: pd.DataFrame, latest: Dict[str, Any], height: i
             )
         )
 
-    view_state = pdk.ViewState(latitude=41.3851, longitude=2.1734, zoom=11.8, pitch=0)
     deck = pdk.Deck(
         map_provider="carto",
         map_style="dark",
-        initial_view_state=view_state,
+        initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=zoom, pitch=0),
         layers=layers,
         tooltip={"html": "<b>{name}</b><br/>{category}<br/>{streets}"},
     )
@@ -172,62 +238,32 @@ def render_city_map(hotspots_df: pd.DataFrame, latest: Dict[str, Any], height: i
         st.pydeck_chart(deck, use_container_width=True, height=height)
     except Exception:
         st.info("The interactive basemap could not be rendered in this environment. Showing hotspot coordinates instead.")
-        st.dataframe(base[["name", "category", "streets", "lat", "lon"]], use_container_width=True, hide_index=True)
+        st.dataframe(base[["name", "layer_group", "category", "streets", "lat", "lon"]], use_container_width=True, hide_index=True)
 
 
-def route_counts(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or "decision_route" not in df.columns:
-        return pd.DataFrame(columns=["route", "count"])
-    vc = df["decision_route"].value_counts().reset_index()
-    vc.columns = ["route", "count"]
-    return vc
-
-
-def make_line(df: pd.DataFrame, cols: list[str], title: str, y_title: str = "Index") -> go.Figure:
-    fig = go.Figure()
-    for col in cols:
-        if col in df.columns:
-            fig.add_trace(go.Scatter(x=df["step_id"], y=df[col], mode="lines", name=col, line=dict(width=2)))
-    fig.update_layout(
-        title=title,
-        template="plotly_dark",
-        margin=dict(l=20, r=20, t=50, b=20),
-        height=300,
-        xaxis_title="Step",
-        yaxis_title=y_title,
-        legend=dict(orientation="h"),
-    )
-    return fig
-
-
-def make_routes(df: pd.DataFrame) -> go.Figure:
-    rc = route_counts(df)
-    fig = px.bar(rc, x="route", y="count", color="route", color_discrete_map=ROUTE_COLORS, template="plotly_dark", title="Decision mix")
-    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=250, showlegend=False)
-    return fig
-
-
-def render_hotspot_summary(latest: Dict[str, Any], hotspots_df: pd.DataFrame) -> None:
-    if not latest:
-        st.info("No active hotspot yet.")
-        return
-    name = latest.get("primary_hotspot_name")
+def hotspot_details(name: str | None, hotspots_df: pd.DataFrame) -> dict[str, Any] | None:
     if not name or hotspots_df.empty:
-        st.info("No hotspot information available.")
-        return
+        return None
     row = hotspots_df[hotspots_df["name"] == name]
     if row.empty:
+        return None
+    return row.iloc[0].to_dict()
+
+
+def render_hotspot_summary(name: str | None, hotspots_df: pd.DataFrame, scenario_note: str | None = None, title: str = "Hotspot") -> None:
+    details = hotspot_details(name, hotspots_df)
+    if not details:
         st.info("No hotspot information available.")
         return
-    row = row.iloc[0]
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown(f"### {row['name']}")
-    st.write(f"**Category:** {row['category']}")
-    st.write(f"**Streets / environment:** {row['streets']}")
-    st.write(f"**Operational relevance:** {row['why']}")
-    note = latest.get("scenario_note")
-    if note:
-        st.caption(str(note))
+    st.markdown(f"### {title}: {details['name']}")
+    st.write(f"**Layer group:** {details['layer_group']}")
+    st.write(f"**Category:** {details['category']}")
+    st.write(f"**Streets / environment:** {details['streets']}")
+    st.write(f"**Operational relevance:** {details['why']}")
+    st.caption(f"Coordinates: {details['lat']:.4f}, {details['lon']:.4f}")
+    if scenario_note:
+        st.caption(str(scenario_note))
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -235,6 +271,16 @@ def render_summary_table(rows: list[tuple[str, Any]], title: str) -> None:
     df = pd.DataFrame([{"Field": k, "Value": v} for k, v in rows])
     st.markdown(f"### {title}")
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def twin_snapshot_fields(snapshot: dict) -> list[tuple[str, Any]]:
+    rows = []
+    for k, v in snapshot.items():
+        if k in {"metadata", "alarms", "name", "ts", "twin_id", "asset_type", "enabled"}:
+            continue
+        if isinstance(v, (int, float, bool)):
+            rows.append((k, v))
+    return rows[:12]
 
 
 init_state()
@@ -262,6 +308,17 @@ with st.sidebar:
     ss["live_window"] = st.slider("Visible live window", 12, 96, int(ss["live_window"]), step=6)
     ss["steps_per_run"] = st.slider("Steps per run", 1, 4, int(ss["steps_per_run"]), step=1)
     ss["sleep_s"] = st.slider("Delay between runs (s)", 0.10, 0.80, float(ss["sleep_s"]), step=0.05)
+
+    st.divider()
+    ss["map_layers"] = st.multiselect(
+        "Visible map layers",
+        options=list(LAYER_COLORS.keys()),
+        default=ss.get("map_layers", list(LAYER_COLORS.keys())),
+    )
+    hotspot_options = ["Auto (scenario hotspot)"] + ([] if hotspots_df.empty else hotspots_df["name"].tolist())
+    default_focus = ss.get("focus_hotspot_mode", "Auto (scenario hotspot)")
+    default_index = hotspot_options.index(default_focus) if default_focus in hotspot_options else 0
+    ss["focus_hotspot_mode"] = st.selectbox("Focus hotspot", hotspot_options, index=default_index)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -294,12 +351,13 @@ if ss["running"]:
 
 df = get_df()
 latest = latest_record(df)
+focus_name = selected_hotspot_name(latest)
 
 st.markdown(
     """
     <div class="hero">
       <div class="hero-title">Barcelona Mobility Control Room</div>
-      <div class="hero-subtitle">Version 2 — central city map, real Barcelona hotspots, stable scenario switching and a cleaner operator layout.</div>
+      <div class="hero-subtitle">Version 3 — central layered map, direct hotspot focus and clearer navigation between overview, twins, risk and audit.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -336,6 +394,7 @@ if not df.empty:
 else:
     st.info("No simulation data yet. Press Step or Start.")
 
+
 tab_overview, tab_map, tab_twins, tab_risk, tab_audit = st.tabs([
     "Overview",
     "Map & Layers",
@@ -349,16 +408,17 @@ with tab_overview:
         st.info("No simulation data yet.")
     else:
         live_df = df.tail(int(ss["live_window"])).copy()
-        left, right = st.columns([1.7, 1.0])
+        left, right = st.columns([1.8, 1.0])
         with left:
-            render_city_map(hotspots_df, latest, height=560)
+            render_city_map(hotspots_df, latest, height=560, focused_name=focus_name)
         with right:
-            render_hotspot_summary(latest, hotspots_df)
+            render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Focused hotspot")
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown("### Current decision")
             st.write(f"**Route:** {ROUTE_LABELS.get(str(latest.get('decision_route', '')), '—')}")
             st.write(f"**Reason:** {latest.get('route_reason', '—')}")
             st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
+            st.write(f"**Scenario:** {SCENARIO_LABELS.get(str(latest.get('scenario', '')), '—')}")
             st.markdown("</div>", unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
@@ -367,13 +427,23 @@ with tab_overview:
             st.plotly_chart(make_line(live_df, ["bus_bunching_index", "curb_occupancy_rate", "risk_score", "gateway_delay_index"], "Pressure indicators"), use_container_width=True)
 
 with tab_map:
-    st.markdown("## Central map")
+    st.markdown("## Map & layers")
     if df.empty:
         st.info("No simulation data yet.")
     else:
-        render_city_map(hotspots_df, latest, height=680)
+        top = st.columns([1.8, 1.0])
+        with top[0]:
+            render_city_map(hotspots_df, latest, height=700, focused_name=focus_name)
+        with top[1]:
+            render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Selected hotspot")
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown("### Active layer filters")
+            st.write(", ".join(ss.get("map_layers", [])) or "No layers selected")
+            st.write(f"**Focus mode:** {ss.get('focus_hotspot_mode', 'Auto (scenario hotspot)')}")
+            st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("### Hotspot catalogue")
-        st.dataframe(hotspots_df, use_container_width=True, height=320)
+        catalogue = hotspots_df[["name", "layer_group", "category", "streets", "lat", "lon"]].copy() if not hotspots_df.empty else hotspots_df
+        st.dataframe(catalogue, use_container_width=True, height=340)
 
 with tab_twins:
     if df.empty:
@@ -381,36 +451,37 @@ with tab_twins:
     else:
         snapshots = ss["rt"].twin_snapshot()
         twin_options = ["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"]
-        ss["twin_sel"] = st.selectbox("Select twin", twin_options, index=twin_options.index(ss.get("twin_sel", "intersection")))
+        default_twin = ss.get("twin_sel", "intersection")
+        ss["twin_sel"] = st.selectbox("Select twin", twin_options, index=twin_options.index(default_twin) if default_twin in twin_options else 0)
         twin_sel = ss["twin_sel"]
         snap = snapshots.get(twin_sel, {})
         md = snap.get("metadata", {}) if isinstance(snap, dict) else {}
+
         cols = st.columns([1.2, 1.0])
         with cols[0]:
             render_summary_table([
                 ("Twin", twin_sel.replace("_", " ").title()),
-                ("Hotspot", md.get("hotspot_name", "—")),
+                ("Twin hotspot", md.get("hotspot_name", "—")),
                 ("Category", md.get("category", "—")),
                 ("Streets", md.get("streets", "—")),
                 ("Scenario note", md.get("scenario_note", latest.get("scenario_note", "—"))),
-            ], "Active twin")
-            numeric_rows = []
-            for k, v in snap.items():
-                if k not in {"metadata", "alarms", "name", "ts", "twin_id", "asset_type", "enabled"} and isinstance(v, (int, float, bool)):
-                    numeric_rows.append((k, v))
-            render_summary_table(numeric_rows[:10], "Key state variables")
+            ], "Twin identity")
+            render_summary_table(twin_snapshot_fields(snap), "Current operational state")
         with cols[1]:
-            render_hotspot_summary({"primary_hotspot_name": md.get("hotspot_name") or latest.get("primary_hotspot_name"), "scenario_note": md.get("scenario_note") or latest.get("scenario_note")}, hotspots_df)
+            twin_hotspot = md.get("hotspot_name") or focus_name
+            render_hotspot_summary(twin_hotspot, hotspots_df, md.get("scenario_note") or latest.get("scenario_note"), title="Twin hotspot")
+
+        wdf = df.tail(int(ss["live_window"]))
         if twin_sel == "intersection":
-            st.plotly_chart(make_line(df.tail(ss["live_window"]), ["corridor_delay_s", "risk_score"], "Intersection-oriented trend", "Index / seconds"), use_container_width=True)
+            st.plotly_chart(make_line(wdf, ["corridor_delay_s", "risk_score"], "Intersection-oriented trend", "Index / seconds"), use_container_width=True)
         elif twin_sel == "road_corridor":
-            st.plotly_chart(make_line(df.tail(ss["live_window"]), ["network_speed_index", "corridor_reliability_index", "gateway_delay_index"], "Road corridor trend"), use_container_width=True)
+            st.plotly_chart(make_line(wdf, ["network_speed_index", "corridor_reliability_index", "gateway_delay_index"], "Road corridor trend"), use_container_width=True)
         elif twin_sel == "bus_corridor":
-            st.plotly_chart(make_line(df.tail(ss["live_window"]), ["bus_bunching_index", "bus_commercial_speed_kmh"], "Bus corridor trend", "Index / km/h"), use_container_width=True)
+            st.plotly_chart(make_line(wdf, ["bus_bunching_index", "bus_commercial_speed_kmh"], "Bus corridor trend", "Index / km/h"), use_container_width=True)
         elif twin_sel == "curb_zone":
-            st.plotly_chart(make_line(df.tail(ss["live_window"]), ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curbside trend", "Rate / queue"), use_container_width=True)
+            st.plotly_chart(make_line(wdf, ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curbside trend", "Rate / queue"), use_container_width=True)
         elif twin_sel == "risk_hotspot":
-            st.plotly_chart(make_line(df.tail(ss["live_window"]), ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot trend"), use_container_width=True)
+            st.plotly_chart(make_line(wdf, ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot trend"), use_container_width=True)
 
 with tab_risk:
     if df.empty:
@@ -422,8 +493,12 @@ with tab_risk:
             st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index"], "Risk evolution"), use_container_width=True)
         with c2:
             st.plotly_chart(make_line(live_df, ["pedestrian_exposure", "bike_conflict_index", "gateway_delay_index"], "Exposure and conflict"), use_container_width=True)
-        render_hotspot_summary(latest, hotspots_df)
-        st.dataframe(live_df[[c for c in ["step_id", "active_event", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "decision_route"] if c in live_df.columns]].tail(12), use_container_width=True)
+        bottom = st.columns([1.0, 1.2])
+        with bottom[0]:
+            render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Risk context hotspot")
+        with bottom[1]:
+            show_cols = [c for c in ["step_id", "active_event", "risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index", "decision_route"] if c in live_df.columns]
+            st.dataframe(live_df[show_cols].tail(12), use_container_width=True)
 
 with tab_audit:
     if df.empty:
@@ -453,7 +528,7 @@ with tab_audit:
                 ("Risk", row.get("risk_score", "—")),
                 ("Gateway delay", row.get("gateway_delay_index", "—")),
             ], "Urban state snapshot")
-        render_hotspot_summary({"primary_hotspot_name": row.get("primary_hotspot_name"), "scenario_note": row.get("scenario_note")}, hotspots_df)
+        render_hotspot_summary(row.get("primary_hotspot_name"), hotspots_df, row.get("scenario_note"), title="Audit hotspot")
         st.markdown("### Technical detail")
         with st.expander("Show dispatch / objective / hybrid detail"):
             st.markdown("**Dispatch**")
@@ -466,4 +541,3 @@ with tab_audit:
             st.markdown("**Quantum Result**")
             result = safe_json_loads(row.get("result_json"))
             st.json(result if result else {"info": "No quantum result on this step."})
-
