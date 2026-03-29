@@ -162,12 +162,17 @@ def render_city_map(hotspots_df: pd.DataFrame, latest: Dict[str, Any], height: i
 
     view_state = pdk.ViewState(latitude=41.3851, longitude=2.1734, zoom=11.8, pitch=0)
     deck = pdk.Deck(
-        map_style="mapbox://styles/mapbox/dark-v11",
+        map_provider="carto",
+        map_style="dark",
         initial_view_state=view_state,
         layers=layers,
         tooltip={"html": "<b>{name}</b><br/>{category}<br/>{streets}"},
     )
-    st.pydeck_chart(deck, use_container_width=True, height=height)
+    try:
+        st.pydeck_chart(deck, use_container_width=True, height=height)
+    except Exception:
+        st.info("The interactive basemap could not be rendered in this environment. Showing hotspot coordinates instead.")
+        st.dataframe(base[["name", "category", "streets", "lat", "lon"]], use_container_width=True, hide_index=True)
 
 
 def route_counts(df: pd.DataFrame) -> pd.DataFrame:
