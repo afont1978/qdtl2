@@ -56,11 +56,6 @@ class RouteSelector:
             "incident_response_portfolio_problem",
             "event_release_rebalancing_problem",
             "multimodal_redispatch_problem",
-            "rail_load_balancing_problem",
-            "interchange_overload_problem",
-            "airport_access_multimodal_problem",
-            "rail_disruption_response_problem",
-            "event_evacuation_multimodal_problem",
         }
 
         if dominant_subproblem in hybrid_friendly_subproblems and urgency != "immediate":

@@ -11,13 +11,6 @@ AssetType = Literal[
     "curb_zone",
     "risk_hotspot",
     "gateway_cluster",
-    "metro_station",
-    "metro_line",
-    "rodalies_station",
-    "rodalies_line",
-    "fgc_station",
-    "fgc_line",
-    "interchange_node",
     "city_mobility_system",
 ]
 

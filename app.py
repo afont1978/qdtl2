@@ -18,28 +18,209 @@ st.set_page_config(page_title="Barcelona Mobility Control Room v5", layout="wide
 st.markdown(
     """
     <style>
-    .block-container {max-width: 1660px; padding-top: 1rem; padding-bottom: 1.2rem;}
-    .hero {padding: 1rem 1.2rem; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px;
-           background: linear-gradient(135deg, rgba(18,28,45,0.96), rgba(8,13,24,0.96)); margin-bottom: 1rem;}
-    .hero-title {font-size: 2rem; font-weight: 700; color: #F4F7FB; margin-bottom: 0.2rem;}
-    .hero-subtitle {font-size: 1rem; color: #C7D0DD;}
-    .metric-card {padding: 0.75rem 0.95rem; border-radius: 16px; background: rgba(255,255,255,0.03);
-                  border: 1px solid rgba(255,255,255,0.06);}
-    .section-card {padding: 0.85rem 1rem; border-radius: 16px; background: rgba(255,255,255,0.03);
-                   border: 1px solid rgba(255,255,255,0.06);}
-    .small-note {font-size: 0.92rem; color: #B7C3D6;}
+    .block-container {max-width: 1680px; padding-top: 0.85rem; padding-bottom: 1.3rem;}
+    .hero {padding: 1.05rem 1.2rem; border: 1px solid rgba(255,255,255,0.07); border-radius: 22px;
+           background: radial-gradient(circle at top left, rgba(38,53,83,0.96), rgba(11,16,26,0.98) 60%);
+           margin-bottom: 1rem; box-shadow: 0 12px 28px rgba(0,0,0,0.25);}
+    .hero-title {font-size: 2rem; font-weight: 750; color: #F4F7FB; margin-bottom: 0.15rem; letter-spacing: 0.01em;}
+    .hero-subtitle {font-size: 0.98rem; color: #C9D4E3; line-height: 1.4;}
+    .metric-shell {padding: 0.8rem 0.95rem; border-radius: 18px; background: linear-gradient(180deg, rgba(255,255,255,0.038), rgba(255,255,255,0.02));
+                   border: 1px solid rgba(255,255,255,0.07); min-height: 110px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);}
+    .metric-shell::before {content: ''; display: block; height: 4px; border-radius: 8px; margin: -0.25rem -0.25rem 0.6rem -0.25rem;}
+    .metric-shell.neutral::before {background: linear-gradient(90deg, #6baed6, #4e79a7);}
+    .metric-shell.good::before {background: linear-gradient(90deg, #5ad66f, #2ca25f);}
+    .metric-shell.warn::before {background: linear-gradient(90deg, #ffd166, #f39c12);}
+    .metric-shell.alert::before {background: linear-gradient(90deg, #ff8a65, #e74c3c);}
+    .metric-eyebrow {font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; color: #95A7BF; margin-bottom: 0.45rem;}
+    .metric-value {font-size: 1.6rem; font-weight: 730; color: #F7FAFF; line-height: 1.1;}
+    .metric-delta {font-size: 0.85rem; color: #B8C6D8; margin-top: 0.4rem;}
+    .section-card {padding: 0.85rem 1rem; border-radius: 18px; background: rgba(255,255,255,0.028);
+                   border: 1px solid rgba(255,255,255,0.06); box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);}
+    .section-title {font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; color: #9FB0C6; margin-bottom: 0.55rem;}
+    .small-note {font-size: 0.88rem; color: #AFC0D4;}
+    .chip-row {display:flex; gap:0.45rem; flex-wrap:wrap; margin:0.2rem 0 0.75rem 0;}
+    .chip {display:inline-flex; align-items:center; gap:0.35rem; padding:0.26rem 0.58rem; border-radius:999px; font-size:0.78rem; font-weight:600; border:1px solid rgba(255,255,255,0.07);}
+    .chip.neutral {background:rgba(94,138,196,0.16); color:#dbe8ff;}
+    .chip.good {background:rgba(76,175,80,0.16); color:#e6ffe8;}
+    .chip.warn {background:rgba(255,193,7,0.16); color:#fff3cc;}
+    .chip.alert {background:rgba(244,67,54,0.16); color:#ffdede;}
+    .chip.dim {background:rgba(255,255,255,0.06); color:#d0dae6;}
+    .subgrid-note {font-size: 0.84rem; color: #B7C3D6;}
+    div[data-testid="stDataFrame"] div[role="table"] {border-radius: 14px; overflow: hidden;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-SCENARIO_LABELS = {
+DEFAULT_SCENARIO_LABELS = {
     "corridor_congestion": "Corridor congestion",
     "school_area_risk": "School-area safety risk",
     "urban_logistics_saturation": "Urban logistics saturation",
     "gateway_access_stress": "Gateway access stress",
     "event_mobility": "Event mobility",
 }
+
+
+def _load_scenario_library_file(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _extract_scenario_labels(obj: dict) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    if not isinstance(obj, dict):
+        return labels
+    if isinstance(obj.get("scenarios"), list):
+        for item in obj["scenarios"]:
+            if not isinstance(item, dict):
+                continue
+            sid = item.get("id")
+            title = item.get("title") or item.get("name")
+            if sid:
+                labels[str(sid)] = str(title or str(sid).replace("_", " ").title())
+    else:
+        # fallback for simple {id: {...}} or {id: title}
+        for sid, item in obj.items():
+            if sid in {"version", "description"}:
+                continue
+            if isinstance(item, dict):
+                title = item.get("title") or item.get("name")
+                labels[str(sid)] = str(title or str(sid).replace("_", " ").title())
+            else:
+                labels[str(sid)] = str(item or str(sid).replace("_", " ").title())
+    return labels
+
+
+def load_scenario_labels() -> dict[str, str]:
+    labels = dict(DEFAULT_SCENARIO_LABELS)
+    candidates = [
+        Path(__file__).with_name("scenario_library.json"),
+        Path(__file__).with_name("scenario_library_high_complexity_v2.json"),
+        Path(__file__).parent / "data" / "scenario_library.json",
+        Path(__file__).parent / "data" / "scenario_library_high_complexity_v2.json",
+        Path.cwd() / "scenario_library.json",
+        Path.cwd() / "scenario_library_high_complexity_v2.json",
+        Path.cwd() / "data" / "scenario_library.json",
+        Path.cwd() / "data" / "scenario_library_high_complexity_v2.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            labels.update(_extract_scenario_labels(_load_scenario_library_file(path)))
+    return labels
+
+
+DEFAULT_SCENARIO_SPECS = {
+    "corridor_congestion": {
+        "title": "Corridor congestion",
+        "complexity": "medium",
+        "modes": ["traffic", "transit"],
+        "primary_hotspots": ["Plaça de les Glòries Catalanes", "Plaça d'Espanya", "Plaça de Catalunya / Ronda Universitat"],
+        "time_profile": "weekday_peak",
+        "trigger_events": ["demand_spike", "bus_bunching"],
+        "disturbances": {"corridor_flow_multiplier": 1.2, "bus_headway_pressure_add": 0.18},
+        "operational_goal": "Stabilize main corridor speed and bus regularity while keeping pedestrian delay under control.",
+        "expected_subproblems": ["signal_coordination_problem", "bus_priority_problem"],
+        "recommended_interventions": ["activate coordinated signal plan", "increase bus priority level"],
+        "kpis": ["network_speed_index", "corridor_reliability_index", "bus_bunching_index"],
+    },
+    "school_area_risk": {
+        "title": "School-area safety risk",
+        "complexity": "medium",
+        "modes": ["safety", "pedestrian"],
+        "primary_hotspots": ["Plaça de Catalunya / Ronda Universitat", "Plaça d'Espanya"],
+        "time_profile": "school_window",
+        "trigger_events": ["school_peak", "rain_event"],
+        "disturbances": {"ped_flow_multiplier": 1.3, "visibility_drop": 0.2},
+        "operational_goal": "Protect vulnerable users and reduce crossing conflict without fully collapsing traffic throughput.",
+        "expected_subproblems": ["pedestrian_protection_problem", "signal_coordination_problem"],
+        "recommended_interventions": ["activate pedestrian protection", "apply speed mitigation"],
+        "kpis": ["risk_score", "near_miss_index", "pedestrian_exposure"],
+    },
+    "urban_logistics_saturation": {
+        "title": "Urban logistics saturation",
+        "complexity": "high",
+        "modes": ["logistics", "curb"],
+        "primary_hotspots": ["Plaça Cerdà / Passeig de la Zona Franca", "Ronda del Port VI / Carrer 3 (Puertas 29-30)", "Paral·lel / Port Vell / salida 21 Ronda Litoral"],
+        "time_profile": "delivery_window",
+        "trigger_events": ["delivery_wave", "illegal_curb_occupation"],
+        "disturbances": {"delivery_pressure_multiplier": 1.35, "illegal_occupancy_add": 0.18},
+        "operational_goal": "Recover curb efficiency and delivery throughput while reducing pedestrian conflict and spillback.",
+        "expected_subproblems": ["curb_allocation_problem", "delivery_slot_problem", "enforcement_problem"],
+        "recommended_interventions": ["increase curbside enforcement", "reassign curb slots", "open targeted access windows"],
+        "kpis": ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"],
+    },
+    "gateway_access_stress": {
+        "title": "Gateway access stress",
+        "complexity": "high",
+        "modes": ["gateway", "traffic", "curb"],
+        "primary_hotspots": ["Aeropuerto Josep Tarradellas BCN-El Prat T1", "Aeropuerto Josep Tarradellas BCN-El Prat T2", "Moll Adossat / Port Creuers (Puerta 2)"],
+        "time_profile": "departure_bank",
+        "trigger_events": ["gateway_surge", "incident"],
+        "disturbances": {"gateway_surge_add": 0.35, "queue_multiplier": 1.2},
+        "operational_goal": "Protect access reliability to strategic gateways and keep curbside and corridor pressure within tolerance.",
+        "expected_subproblems": ["gateway_resource_problem", "multimodal_redispatch_problem"],
+        "recommended_interventions": ["activate metering", "staging for taxi/VTC", "gateway diversion plan"],
+        "kpis": ["gateway_delay_index", "network_speed_index", "curb_occupancy_rate"],
+    },
+    "event_mobility": {
+        "title": "Event mobility",
+        "complexity": "high",
+        "modes": ["event", "transit", "traffic"],
+        "primary_hotspots": ["Plaça d'Espanya", "Sants Estació / Plaça dels Països Catalans", "Plaça de Catalunya / Ronda Universitat"],
+        "time_profile": "event_release_window",
+        "trigger_events": ["event_release", "bus_bunching"],
+        "disturbances": {"event_flow_multiplier": 1.25, "bus_headway_pressure_add": 0.2},
+        "operational_goal": "Disperse multimodal demand after a major event while protecting bus operations and avoiding systemic spillback.",
+        "expected_subproblems": ["event_release_rebalancing_problem", "bus_priority_problem", "signal_coordination_problem"],
+        "recommended_interventions": ["activate post-event dispersal plan", "increase bus priority", "temporary diversion on saturated approaches"],
+        "kpis": ["network_speed_index", "bus_bunching_index", "gateway_delay_index"],
+    },
+}
+
+
+def _extract_scenario_specs(obj: dict) -> dict[str, dict]:
+    specs: dict[str, dict] = {}
+    if not isinstance(obj, dict):
+        return specs
+    if isinstance(obj.get("scenarios"), list):
+        for item in obj["scenarios"]:
+            if not isinstance(item, dict):
+                continue
+            sid = item.get("id")
+            if sid:
+                specs[str(sid)] = item
+    else:
+        for sid, item in obj.items():
+            if sid in {"version", "description"}:
+                continue
+            if isinstance(item, dict):
+                specs[str(sid)] = item
+    return specs
+
+
+def load_scenario_specs() -> dict[str, dict]:
+    specs = dict(DEFAULT_SCENARIO_SPECS)
+    candidates = [
+        Path(__file__).with_name("scenario_library.json"),
+        Path(__file__).with_name("scenario_library_high_complexity_v2.json"),
+        Path(__file__).parent / "data" / "scenario_library.json",
+        Path(__file__).parent / "data" / "scenario_library_high_complexity_v2.json",
+        Path.cwd() / "scenario_library.json",
+        Path.cwd() / "scenario_library_high_complexity_v2.json",
+        Path.cwd() / "data" / "scenario_library.json",
+        Path.cwd() / "data" / "scenario_library_high_complexity_v2.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            specs.update(_extract_scenario_specs(_load_scenario_library_file(path)))
+    return specs
+
+
+SCENARIO_LABELS = load_scenario_labels()
+SCENARIO_SPECS = load_scenario_specs()
+
 MODE_LABELS = {
     "traffic": "Traffic",
     "safety": "Safety",
@@ -63,12 +244,27 @@ LAYER_COLORS = {
     "Logistics / curb / port": [255, 127, 0, 170],
     "Airport / gateway": [152, 78, 163, 170],
 }
-DATA_PATH = Path(__file__).with_name("barcelona_mobility_hotspots.csv")
+def resolve_hotspots_path() -> Path:
+    candidates = [
+        Path(__file__).with_name("barcelona_mobility_hotspots.csv"),
+        Path(__file__).parent / "data" / "barcelona_mobility_hotspots.csv",
+        Path.cwd() / "barcelona_mobility_hotspots.csv",
+        Path.cwd() / "data" / "barcelona_mobility_hotspots.csv",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+
+DATA_PATH = resolve_hotspots_path()
 
 
 def init_state() -> None:
     ss = st.session_state
     ss.setdefault("scenario", "corridor_congestion")
+    if ss.get("scenario") not in SCENARIO_LABELS:
+        ss["scenario"] = next(iter(SCENARIO_LABELS.keys()))
     ss.setdefault("seed", 42)
     ss.setdefault("running", False)
     ss.setdefault("live_window", 36)
@@ -132,10 +328,53 @@ def selected_hotspot_name(latest: Dict[str, Any]) -> str | None:
     return mode
 
 
-def kpi_block(label: str, value: str, delta: str = "") -> None:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric(label, value, delta)
-    st.markdown("</div>", unsafe_allow_html=True)
+def chip(text: str, tone: str = "neutral") -> str:
+    return f'<span class="chip {tone}">{text}</span>'
+
+
+def kpi_block(label: str, value: str, delta: str = "", tone: str = "neutral") -> None:
+    st.markdown(
+        f"""
+        <div class="metric-shell {tone}">
+          <div class="metric-eyebrow">{label}</div>
+          <div class="metric-value">{value}</div>
+          <div class="metric-delta">{delta or '&nbsp;'}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def tone_from_value(value: float, higher_is_better: bool = True) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return "neutral"
+    if higher_is_better:
+        if v >= 0.75:
+            return "good"
+        if v >= 0.5:
+            return "neutral"
+        if v >= 0.3:
+            return "warn"
+        return "alert"
+    else:
+        if v <= 0.25:
+            return "good"
+        if v <= 0.45:
+            return "neutral"
+        if v <= 0.65:
+            return "warn"
+        return "alert"
+
+
+def route_tone(route: str) -> str:
+    return {"CLASSICAL": "neutral", "QUANTUM": "warn", "FALLBACK_CLASSICAL": "alert"}.get(route, "neutral")
+
+
+def render_chip_row(items: list[tuple[str, str]]) -> None:
+    html = '<div class="chip-row">' + ''.join(chip(text, tone) for text, tone in items if text) + '</div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def route_counts(df: pd.DataFrame) -> pd.DataFrame:
@@ -184,8 +423,37 @@ def make_route_mix_chart(df: pd.DataFrame) -> go.Figure:
     rc = route_counts(df)
     if rc.empty:
         return go.Figure()
-    fig = px.pie(rc, names="route", values="count", template="plotly_dark", title="Route mix", color="route", color_discrete_map=ROUTE_COLORS)
+    fig = px.pie(rc, names="route", values="count", hole=0.58, template="plotly_dark", title="Route mix", color="route", color_discrete_map=ROUTE_COLORS)
     fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=280, showlegend=True)
+    return fig
+
+
+def make_subsystem_score_chart(latest: Dict[str, Any]) -> go.Figure:
+    if not latest:
+        return go.Figure()
+    curb_pressure = 0.55 * float(latest.get("curb_occupancy_rate", 0.0) or 0.0) + 0.45 * float(latest.get("illegal_curb_occupancy_rate", 0.0) or 0.0)
+    data = pd.DataFrame({
+        "Subsystem": ["Traffic", "Transit", "Risk", "Logistics", "Gateway"],
+        "Score": [
+            float(latest.get("network_speed_index", 0.0) or 0.0),
+            max(0.0, 1.0 - float(latest.get("bus_bunching_index", 0.0) or 0.0)),
+            max(0.0, 1.0 - float(latest.get("risk_score", 0.0) or 0.0)),
+            max(0.0, 1.0 - curb_pressure),
+            max(0.0, 1.0 - float(latest.get("gateway_delay_index", 0.0) or 0.0)),
+        ],
+    })
+    fig = px.bar(data, x="Score", y="Subsystem", orientation="h", template="plotly_dark", title="Subsystem scoreboard", color="Subsystem", color_discrete_sequence=["#4E79A7", "#53C6D9", "#F06565", "#9C6ADE", "#F39C12"])
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=300, showlegend=False, xaxis_range=[0,1.05])
+    return fig
+
+
+def make_signal_phase_chart(signals_df: pd.DataFrame) -> go.Figure:
+    if signals_df.empty:
+        return go.Figure()
+    counts = signals_df["phase"].value_counts().reindex(["Emerging","Active","Clearing"], fill_value=0).reset_index()
+    counts.columns = ["Phase", "Count"]
+    fig = px.bar(counts, x="Phase", y="Count", template="plotly_dark", title="Signal phases", color="Phase", color_discrete_map={"Emerging":"#ffd166","Active":"#ff6b6b","Clearing":"#95a5a6"})
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False)
     return fig
 
 
@@ -268,21 +536,24 @@ def render_hotspot_summary(name: str | None, hotspots_df: pd.DataFrame, scenario
         st.info("No hotspot information available.")
         return
     st.markdown(f"### {title}")
-    c1, c2 = st.columns([1.15, 0.85])
+    render_chip_row([
+        (str(details.get("layer_group", "—")), "neutral"),
+        (str(details.get("category", "—")), "dim"),
+        (f"{float(details.get('lat', 0.0)):.3f}, {float(details.get('lon', 0.0)):.3f}", "dim"),
+    ])
+    c1, c2 = st.columns([1.35, 0.85])
     with c1:
-        render_summary_table([
-            ("Name", details["name"]),
-            ("Layer group", details["layer_group"]),
-            ("Category", details["category"]),
-            ("Streets", details["streets"]),
-        ], "Hotspot facts")
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Location</div>', unsafe_allow_html=True)
+        st.markdown(f"**{details['name']}**")
+        st.caption(str(details.get("streets", "—")))
+        st.markdown("</div>", unsafe_allow_html=True)
     with c2:
-        render_summary_table([
-            ("Latitude", round(float(details["lat"]), 4)),
-            ("Longitude", round(float(details["lon"]), 4)),
-            ("Scenario anchor", scenario_note or "—"),
-        ], "Location")
-    with st.expander("Context note", expanded=False):
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Scenario anchor</div>', unsafe_allow_html=True)
+        st.write(scenario_note or "—")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with st.expander("Operational context", expanded=False):
         st.caption(str(details.get("why", "No additional note available.")))
 
 
@@ -977,7 +1248,7 @@ with st.sidebar:
             "Scenario",
             options=list(SCENARIO_LABELS.keys()),
             format_func=lambda x: SCENARIO_LABELS[x],
-            index=list(SCENARIO_LABELS.keys()).index(ss["scenario"]),
+            index=(list(SCENARIO_LABELS.keys()).index(ss["scenario"]) if ss.get("scenario") in SCENARIO_LABELS else 0),
         )
         seed_choice = st.number_input("Simulation seed", min_value=1, max_value=999999, value=int(ss["seed"]), step=1)
         submitted = st.form_submit_button("Apply scenario / seed", use_container_width=True)
@@ -1022,21 +1293,251 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.caption(f"Current scenario: {SCENARIO_LABELS[ss['scenario']]}")
+    st.caption(f"Current scenario: {SCENARIO_LABELS.get(ss['scenario'], ss['scenario'])}")
     st.caption(f"Seed: {ss['seed']}")
-    st.caption("Stable live mode: only the top Live Monitor auto-refreshes. The rest of the app stays static to minimize flicker.")
 
 st.markdown(
     """
     <div class="hero">
       <div class="hero-title">Barcelona Mobility Control Room</div>
-      <div class="hero-subtitle">Version 5 — stable real-time architecture. A dedicated Live Monitor auto-refreshes while detailed views stay static to minimize flicker.</div>
+      <div class="hero-subtitle">Operational dashboard for synthetic Barcelona mobility: traffic, transit, risk, logistics, gateways, alerts and contextual what-if.</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 run_every = f"{ss['live_interval_s']}s" if ss.get("running", False) else None
+
+
+def scenario_spec_for(scenario_id: str | None) -> dict[str, Any]:
+    if not scenario_id:
+        return {}
+    spec = SCENARIO_SPECS.get(str(scenario_id), {})
+    return spec if isinstance(spec, dict) else {}
+
+
+def build_story_map_df(hotspots_df: pd.DataFrame, latest: Dict[str, Any], spec: dict, focus_name: str | None) -> pd.DataFrame:
+    if hotspots_df.empty:
+        return pd.DataFrame()
+    names = []
+    primary = spec.get("primary_hotspots", []) or []
+    if isinstance(primary, str):
+        primary = [primary]
+    names.extend([str(x) for x in primary])
+    current = latest.get("primary_hotspot_name")
+    if current:
+        names.append(str(current))
+    if focus_name:
+        names.append(str(focus_name))
+    names = [n for i, n in enumerate(names) if n and n in hotspots_df["name"].tolist() and n not in names[:i]]
+    if not names:
+        return pd.DataFrame()
+    df = hotspots_df[hotspots_df["name"].isin(names)].copy()
+    roles=[]
+    colors=[]
+    radii=[]
+    labels=[]
+    active_event = latest.get("active_event") or "none"
+    for _, row in df.iterrows():
+        name = row["name"]
+        if name == focus_name:
+            role = "Focused hotspot"
+            color = [86, 180, 255, 235]
+            radius = 360
+            label = "FOCUS"
+        elif name == current:
+            role = "Current operational hotspot"
+            color = [242, 159, 5, 235]
+            radius = 330
+            label = "NOW"
+        else:
+            idx = primary.index(name) + 1 if name in primary else 0
+            role = f"Primary hotspot {idx}" if idx else "Scenario hotspot"
+            color = [196, 93, 255, 215] if idx == 1 else [125, 94, 255, 200]
+            radius = 290 if idx == 1 else 250
+            label = f"P{idx}" if idx else "P"
+        roles.append(role)
+        colors.append(color)
+        radii.append(radius)
+        labels.append(label)
+    df["role"] = roles
+    df["color"] = colors
+    df["radius"] = radii
+    df["label"] = labels
+    df["active_event"] = active_event
+    return df
+
+
+def render_scenario_story_map(hotspots_df: pd.DataFrame, latest: Dict[str, Any], spec: dict, focus_name: str | None = None, height: int = 720) -> None:
+    plot_df = build_story_map_df(hotspots_df, latest, spec, focus_name)
+    if plot_df.empty:
+        st.info("No scenario hotspot data available.")
+        return
+    center_lat = float(plot_df["lat"].mean())
+    center_lon = float(plot_df["lon"].mean())
+    zoom = 11.8 if len(plot_df) > 2 else 12.6
+    layers = [
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=plot_df,
+            get_position='[lon, lat]',
+            get_fill_color="color",
+            get_radius="radius",
+            pickable=True,
+            auto_highlight=True,
+        ),
+        pdk.Layer(
+            "TextLayer",
+            data=plot_df,
+            get_position='[lon, lat]',
+            get_text='label',
+            get_size=14,
+            get_color=[240, 246, 255, 220],
+            get_alignment_baseline="bottom",
+            get_pixel_offset=[0, 18],
+        ),
+    ]
+    deck = pdk.Deck(
+        map_provider="carto",
+        map_style="dark",
+        initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=zoom, pitch=0),
+        layers=layers,
+        tooltip={"html": "<b>{name}</b><br/>{role}<br/>{category}<br/>{streets}<br/><b>Event:</b> {active_event}"},
+    )
+    try:
+        st.pydeck_chart(deck, use_container_width=True, height=height)
+    except Exception:
+        st.dataframe(plot_df[["name", "role", "category", "streets", "lat", "lon"]], use_container_width=True, hide_index=True)
+
+
+def make_story_event_track(spec: dict, active_event: str | None, step_id: int | None = None) -> go.Figure:
+    events = spec.get("trigger_events", []) or []
+    if isinstance(events, str):
+        events = [events]
+    if not events:
+        return go.Figure()
+
+    plot_df = pd.DataFrame({"Order": list(range(1, len(events)+1)), "Event": events})
+    current_idx = 0
+    if step_id is not None and len(events) > 0:
+        try:
+            current_idx = int(step_id - 1) % len(events)
+        except Exception:
+            current_idx = 0
+
+    def classify_event(row):
+        if active_event and row["Event"] == active_event:
+            return "Active"
+        if row.name == current_idx:
+            return "Current"
+        return "Scenario"
+
+    plot_df["State"] = plot_df.apply(classify_event, axis=1)
+    color_map = {"Scenario": "#5A78C9", "Current": "#9C6ADE", "Active": "#F29F05"}
+    fig = px.scatter(
+        plot_df,
+        x="Order",
+        y=[1] * len(plot_df),
+        color="State",
+        text="Event",
+        template="plotly_dark",
+        title="Scenario event sequence",
+        color_discrete_map=color_map,
+    )
+    fig.update_traces(textposition="top center", marker=dict(size=18))
+    fig.update_yaxes(visible=False, showticklabels=False)
+    fig.update_xaxes(title="Event order")
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=True)
+    return fig
+
+
+def make_story_disturbance_chart(spec: dict) -> go.Figure:
+    dist = spec.get("disturbances", {}) or {}
+    rows = []
+    for k, v in dist.items():
+        try:
+            rows.append({"Disturbance": str(k).replace("_", " ").title(), "Value": float(v)})
+        except Exception:
+            continue
+    if not rows:
+        return go.Figure()
+    plot_df = pd.DataFrame(rows)
+    fig = px.bar(plot_df, x="Disturbance", y="Value", template="plotly_dark", title="Disturbance profile")
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False)
+    return fig
+
+
+def render_story_list(title: str, items: list[str], tone: str = "neutral") -> None:
+    st.markdown(f"### {title}")
+    if not items:
+        st.caption("No data available.")
+        return
+    for item in items[:8]:
+        chip(str(item).replace("_", " ").title() if "_" in str(item) else str(item), tone)
+
+
+def render_scenario_storyboard(latest: Dict[str, Any], hotspots_df: pd.DataFrame, focus_name: str | None) -> None:
+    scenario_id = str(latest.get("scenario", st.session_state.get("scenario", "corridor_congestion")))
+    spec = scenario_spec_for(scenario_id)
+    title = SCENARIO_LABELS.get(scenario_id, scenario_id.replace("_", " ").title())
+    complexity = str(spec.get("complexity", "baseline")).title()
+    modes = spec.get("modes", []) or []
+    time_profile = spec.get("time_profile", "synthetic_default")
+    primary_hotspots = spec.get("primary_hotspots", []) or []
+    if isinstance(primary_hotspots, str):
+        primary_hotspots = [primary_hotspots]
+
+    st.markdown("## Scenario Storyboard")
+    top = st.columns([1.6, 1.0])
+    with top[0]:
+        render_scenario_story_map(hotspots_df, latest, spec, focus_name=focus_name, height=720)
+    with top[1]:
+        render_summary_table([
+            ("Scenario", title),
+            ("Complexity", complexity),
+            ("Modes", ", ".join(modes) if modes else "—"),
+            ("Time profile", str(time_profile).replace("_", " ").title()),
+            ("Active event", latest.get("active_event", "none") or "none"),
+            ("Primary hotspot", latest.get("primary_hotspot_name", "—")),
+            ("Focused hotspot", focus_name or "—"),
+            ("Route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—")),
+        ], "Scenario profile")
+        render_chip_row([
+            (f"Risk · {latest.get('dominant_risk_type', '—')}", 'alert'),
+            (f"Phase · {latest.get('risk_phase', '—')}", 'warn'),
+            (f"Pressure · {latest.get('city_pressure_score', latest.get('risk_burden', '—'))}", 'neutral'),
+        ])
+        st.markdown("### Operational goal")
+        st.write(spec.get("operational_goal", latest.get("scenario_note", "No scenario note available.")))
+
+    charts = st.columns(3)
+    with charts[0]:
+        st.plotly_chart(make_story_event_track(spec, latest.get("active_event"), int(latest.get("step_id", 0) or 0)), use_container_width=True, key=f"story_events_{scenario_id}_{int(latest.get('step_id', 0) or 0)}")
+    with charts[1]:
+        st.plotly_chart(make_story_disturbance_chart(spec), use_container_width=True, key=f"story_dist_{scenario_id}_{int(latest.get('step_id', 0) or 0)}")
+    with charts[2]:
+        st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True, key=f"story_subsystems_{scenario_id}_{int(latest.get('step_id', 0) or 0)}")
+
+    cols = st.columns(3)
+    with cols[0]:
+        render_story_list("Primary hotspots", [str(x) for x in primary_hotspots], "neutral")
+    with cols[1]:
+        render_story_list("Expected subproblems", [str(x) for x in spec.get("expected_subproblems", [])], "warn")
+    with cols[2]:
+        render_story_list("Recommended interventions", [str(x) for x in spec.get("recommended_interventions", [])], "alert")
+
+    bottom = st.columns(2)
+    with bottom[0]:
+        render_summary_table([
+            ("Recommended action", latest.get("recommended_action", "—")),
+            ("Action priority", latest.get("action_priority", "—")),
+            ("Responsible layer", latest.get("responsible_layer", "—")),
+            ("Expected impact", latest.get("expected_impact", "—")),
+        ], "Live operational interpretation")
+    with bottom[1]:
+        kpis = spec.get("kpis", []) or []
+        render_summary_table([(metric_label(str(k)), latest.get(str(k), "—")) for k in kpis[:6]], "Scenario KPI watchlist")
+
 
 @st.fragment(run_every=run_every)
 def live_monitor_fragment():
@@ -1054,40 +1555,43 @@ def live_monitor_fragment():
 
     row1 = st.columns(6)
     with row1[0]:
-        kpi_block("Mode", MODE_LABELS.get(str(latest.get("mode", "")), str(latest.get("mode", "—"))))
+        kpi_block("Mode", MODE_LABELS.get(str(latest.get("mode", "")), str(latest.get("mode", "—"))), tone="neutral")
     with row1[1]:
-        kpi_block("Network speed", f"{latest.get('network_speed_index', 0.0):.2f}")
+        kpi_block("Network speed", f"{latest.get('network_speed_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('network_speed_index',0.0) or 0.0), True))
     with row1[2]:
-        kpi_block("Corridor reliability", f"{latest.get('corridor_reliability_index', 0.0):.2f}")
+        kpi_block("Corridor reliability", f"{latest.get('corridor_reliability_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('corridor_reliability_index',0.0) or 0.0), True))
     with row1[3]:
-        kpi_block("Bus bunching", f"{latest.get('bus_bunching_index', 0.0):.2f}")
+        kpi_block("Bus bunching", f"{latest.get('bus_bunching_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('bus_bunching_index',0.0) or 0.0), False))
     with row1[4]:
-        kpi_block("Risk", f"{latest.get('risk_score', 0.0):.2f}")
+        kpi_block("Risk", f"{latest.get('risk_score', 0.0):.2f}", tone=tone_from_value(float(latest.get('risk_score',0.0) or 0.0), False))
     with row1[5]:
-        kpi_block("Gateway delay", f"{latest.get('gateway_delay_index', 0.0):.2f}")
+        kpi_block("Gateway delay", f"{latest.get('gateway_delay_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('gateway_delay_index',0.0) or 0.0), False))
 
     row2 = st.columns(5)
     with row2[0]:
-        kpi_block("Decision route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"))
+        kpi_block("Decision route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"), tone=route_tone(str(latest.get("decision_route", ""))))
     with row2[1]:
-        kpi_block("Confidence", f"{float(latest.get('decision_confidence', 0.0))*100:.1f}%")
+        kpi_block("Confidence", f"{float(latest.get('decision_confidence', 0.0))*100:.1f}%", tone=tone_from_value(float(latest.get('decision_confidence',0.0) or 0.0), True))
     with row2[2]:
-        kpi_block("Latency", f"{int(latest.get('exec_ms', 0))} ms")
+        kpi_block("Latency", f"{int(latest.get('exec_ms', 0))} ms", tone=tone_from_value(min(float(latest.get('exec_ms',0) or 0)/1200.0,1.0), False))
     with row2[3]:
         q_share = (df["decision_route"] == "QUANTUM").mean() * 100.0 if "decision_route" in df.columns else 0.0
-        kpi_block("Quantum share", f"{q_share:.1f}%")
+        kpi_block("Quantum share", f"{q_share:.1f}%", tone="warn" if q_share > 20 else "neutral")
     with row2[4]:
         fb_rate = df["fallback_triggered"].mean() * 100.0 if "fallback_triggered" in df.columns else 0.0
-        kpi_block("Fallback rate", f"{fb_rate:.1f}%")
-
-    st.caption("This is the only auto-refreshing surface. Streamlit fragments rerun independently of the full app, which keeps the rest of the interface stable and reduces flicker. However, elements inside the fragment are still redrawn on each fragment rerun, so keeping this live area lightweight is important. See Streamlit fragments docs. citeturn0search0turn0search2")
+        kpi_block("Fallback rate", f"{fb_rate:.1f}%", tone=tone_from_value(min(fb_rate/100.0,1.0), False))
 
     live_df = df.tail(int(st.session_state.get("live_window", 36))).copy()
-    c1, c2 = st.columns(2)
+    render_chip_row([
+        (f"Hotspot · {latest.get('primary_hotspot_name', '—')}", "neutral"),
+        (f"Event · {latest.get('active_event', 'none') or 'none'}", "alert" if (latest.get('active_event') not in [None, 'none']) else "dim"),
+        (f"Action · {latest.get('recommended_action', 'n/a')}", "warn"),
+    ])
+    c1, c2 = st.columns([1.25, 1.0])
     with c1:
         st.line_chart(live_df.set_index("step_id")[[c for c in ["network_speed_index", "corridor_reliability_index", "step_operational_score"] if c in live_df.columns]], use_container_width=True)
     with c2:
-        st.line_chart(live_df.set_index("step_id")[[c for c in ["bus_bunching_index", "risk_score", "gateway_delay_index"] if c in live_df.columns]], use_container_width=True)
+        st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True, key="plotly_1199")
     c3, c4 = st.columns(2)
     with c3:
         st.line_chart(live_df.set_index("step_id")[[c for c in ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"] if c in live_df.columns]], use_container_width=True)
@@ -1099,23 +1603,39 @@ def live_monitor_fragment():
         render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Focused hotspot")
     with detail_right:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.markdown("### Current live decision")
-        st.write(f"**Route:** {ROUTE_LABELS.get(str(latest.get('decision_route', '')), '—')}")
-        st.write(f"**Reason:** {latest.get('route_reason', '—')}")
-        st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
-        st.write(f"**Primary hotspot:** {latest.get('primary_hotspot_name', '—')}")
+        st.markdown('<div class="section-title">Current live decision</div>', unsafe_allow_html=True)
+        render_chip_row([
+            (ROUTE_LABELS.get(str(latest.get('decision_route', '')), '—'), route_tone(str(latest.get('decision_route', '')))),
+            (f"Priority · {latest.get('action_priority', '—')}", "warn"),
+            (f"Owner · {latest.get('responsible_layer', '—')}", "dim"),
+        ])
+        st.write(latest.get('recommended_action', '—'))
+        st.caption(latest.get('expected_impact', latest.get('route_reason', '—')))
         st.markdown("</div>", unsafe_allow_html=True)
 
 live_monitor_fragment()
+
+
+@st.fragment(run_every=run_every)
+def scenario_storyboard_fragment():
+    df_local = get_df()
+    latest_local = latest_record(df_local)
+    focus_local = selected_hotspot_name(latest_local)
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+    hotspots_live = load_hotspots()
+    render_scenario_storyboard(latest_local, hotspots_live, focus_local)
 
 df = get_df()
 latest = latest_record(df)
 focus_name = selected_hotspot_name(latest)
 
-tab_overview, tab_map, tab_signals, tab_twins, tab_risk, tab_sim, tab_audit = st.tabs([
-    "Overview snapshot",
+tab_overview, tab_map, tab_signals, tab_story, tab_twins, tab_risk, tab_sim, tab_audit = st.tabs([
+    "Overview",
     "Map & Layers",
     "Signals & Alerts Map",
+    "Scenario Storyboard",
     "Mobility Twins",
     "Risk & Prevention",
     "What-if & Simulation",
@@ -1133,19 +1653,19 @@ with tab_overview:
         with right:
             top_right = st.columns(2)
             with top_right[0]:
-                kpi_block("Route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"))
+                kpi_block("Route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"), tone=route_tone(str(latest.get("decision_route", ""))))
             with top_right[1]:
-                kpi_block("Event", str(latest.get("active_event", "none") or "none"))
+                kpi_block("Event", str(latest.get("active_event", "none") or "none"), tone="alert" if (latest.get("active_event") not in [None, "none"]) else "dim")
             render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Focused hotspot")
             if not df.empty:
-                st.plotly_chart(make_route_mix_chart(df.tail(max(int(ss["live_window"]), 12))), use_container_width=True)
+                st.plotly_chart(make_route_mix_chart(df.tail(max(int(ss["live_window"]), 12))), use_container_width=True, key="plotly_1253")
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.plotly_chart(make_line(live_df, ["network_speed_index", "corridor_reliability_index"], "Network dynamics"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["network_speed_index", "corridor_reliability_index"], "Network dynamics"), use_container_width=True, key="plotly_1256")
         with c2:
-            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh"], "Transit dynamics"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh"], "Transit dynamics"), use_container_width=True, key="plotly_1258")
         with c3:
-            st.plotly_chart(make_line(live_df, ["risk_score", "gateway_delay_index", "curb_occupancy_rate"], "Pressure dynamics"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["risk_score", "gateway_delay_index", "curb_occupancy_rate"], "Pressure dynamics"), use_container_width=True, key="plotly_1260")
 
 with tab_map:
     st.markdown("## Map & layers")
@@ -1160,7 +1680,8 @@ with tab_map:
             if not hotspots_df.empty:
                 layer_counts = hotspots_df[hotspots_df["layer_group"].isin(ss.get("map_layers", []))]["layer_group"].value_counts().reset_index()
                 layer_counts.columns = ["Layer", "Count"]
-                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Active layer catalogue", height=280), use_container_width=True)
+                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Layer catalogue", height=240), use_container_width=True, key="plotly_1275")
+                st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True, key="plotly_1276")
         catalogue = hotspots_df[["name", "layer_group", "category", "streets", "lat", "lon"]].copy() if not hotspots_df.empty else hotspots_df
         st.dataframe(catalogue, use_container_width=True, height=300)
 
@@ -1186,7 +1707,7 @@ with tab_signals:
                     ("Focused hotspot", focus_name or "—"),
                     ("Primary route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—")),
                 ], "Operational context")
-                st.plotly_chart(make_alert_level_chart(signals_df), use_container_width=True)
+                st.plotly_chart(make_alert_level_chart(signals_df), use_container_width=True, key="plotly_1302")
                 st.dataframe(
                     top_alerts[["name", "alert_level", "phase", "signal_type", "active_event", "severity"]],
                     use_container_width=True,
@@ -1196,11 +1717,11 @@ with tab_signals:
 
             info_cols = st.columns(3)
             with info_cols[0]:
-                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["risk_score", "near_miss_index"], "Risk signal trend"), use_container_width=True)
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["risk_score", "near_miss_index"], "Risk signal trend"), use_container_width=True, key="plotly_1312")
             with info_cols[1]:
-                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["bus_bunching_index", "corridor_reliability_index"], "Transit signal trend"), use_container_width=True)
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["bus_bunching_index", "corridor_reliability_index"], "Transit signal trend"), use_container_width=True, key="plotly_1314")
             with info_cols[2]:
-                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "gateway_delay_index"], "Curb / gateway trend"), use_container_width=True)
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "gateway_delay_index"], "Curb / gateway trend"), use_container_width=True, key="plotly_1316")
 
 with tab_twins:
     if df.empty:
@@ -1225,35 +1746,58 @@ with tab_twins:
 
         grid = st.columns([1.45, 1.45, 1.0])
         with grid[0]:
-            st.plotly_chart(make_line(live_df, metric_map[twin_sel][0], "Twin trend A"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, metric_map[twin_sel][0], "Twin trend A"), use_container_width=True, key="plotly_1341")
         with grid[1]:
-            st.plotly_chart(make_line(live_df, metric_map[twin_sel][1], "Twin trend B"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, metric_map[twin_sel][1], "Twin trend B"), use_container_width=True, key="plotly_1343")
         with grid[2]:
             render_hotspot_summary(md.get("hotspot_name") or focus_name, hotspots_df, md.get("scenario_note") or latest.get("scenario_note"), title="Twin hotspot")
+            render_chip_row([
+                (f"Status · {snap.get('operational_status', '—')}", 'neutral'),
+                (f"Pressure · {snap.get('pressure_level', '—')}", 'warn'),
+                (f"Trend · {snap.get('trend_state', '—')}", 'dim'),
+                (f"Action · {snap.get('action_active', '—')}", 'alert' if snap.get('action_active') not in [None,'none','None','—'] else 'dim'),
+            ])
             twin_rows = [(k, v) for k, v in twin_snapshot_fields(snap)]
-            render_summary_table(twin_rows[:8], "Current metrics")
+            render_summary_table(twin_rows[:8], "Key metrics")
 
         if twin_sel == "bus_corridor":
-            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh", "bus_priority_requests"], "Bus corridor focus"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh", "bus_priority_requests"], "Bus corridor focus"), use_container_width=True, key="plotly_1356")
         elif twin_sel == "curb_zone":
-            st.plotly_chart(make_line(live_df, ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curb zone focus"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curb zone focus"), use_container_width=True, key="plotly_1358")
         elif twin_sel == "risk_hotspot":
-            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot focus"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot focus"), use_container_width=True, key="plotly_1360")
 
 with tab_risk:
     if df.empty:
         st.info("No simulation data yet.")
     else:
         live_df = df.tail(int(ss["live_window"])).copy()
+        risk_row = st.columns(4)
+        with risk_row[0]:
+            kpi_block("Risk", f"{latest.get('risk_score', 0.0):.2f}", tone=tone_from_value(float(latest.get('risk_score',0.0) or 0.0), False))
+        with risk_row[1]:
+            kpi_block("Near-miss", f"{latest.get('near_miss_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('near_miss_index',0.0) or 0.0), False))
+        with risk_row[2]:
+            kpi_block("Pedestrian exposure", f"{latest.get('pedestrian_exposure', 0.0):.2f}", tone=tone_from_value(float(latest.get('pedestrian_exposure',0.0) or 0.0), False))
+        with risk_row[3]:
+            kpi_block("Gateway pressure", f"{latest.get('gateway_delay_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('gateway_delay_index',0.0) or 0.0), False))
         c1, c2, c3 = st.columns([1.0, 1.0, 1.0])
         with c1:
-            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index"], "Risk evolution"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index"], "Risk evolution"), use_container_width=True, key="plotly_1378")
         with c2:
-            st.plotly_chart(make_line(live_df, ["pedestrian_exposure", "bike_conflict_index"], "Exposure and conflict"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["pedestrian_exposure", "bike_conflict_index"], "Exposure and conflict"), use_container_width=True, key="plotly_1380")
         with c3:
-            st.plotly_chart(make_line(live_df, ["corridor_delay_s", "bus_bunching_index", "gateway_delay_index"], "Risk context"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["corridor_delay_s", "bus_bunching_index", "gateway_delay_index"], "Risk context"), use_container_width=True, key="plotly_1382")
+        render_chip_row([
+            (f"Dominant risk · {latest.get('dominant_risk_type', '—')}", 'alert'),
+            (f"Phase · {latest.get('risk_phase', '—')}", 'warn'),
+            (f"Forecast · {latest.get('risk_forecast_trend', '—')}", 'neutral'),
+        ])
         render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Risk hotspot")
 
+
+with tab_story:
+    scenario_storyboard_fragment()
 
 with tab_sim:
     st.markdown("## What-if & Simulation")
@@ -1307,7 +1851,7 @@ with tab_sim:
             )
             top = st.columns(3)
             with top[0]:
-                kpi_block("Projected route", ROUTE_LABELS.get(projected.get("what_if_route", "CLASSICAL"), "Classical"))
+                kpi_block("Projected route", ROUTE_LABELS.get(projected.get("what_if_route", "CLASSICAL"), "Classical"), tone=route_tone(projected.get("what_if_route", "CLASSICAL")))
             with top[1]:
                 delta_score = projected.get("step_operational_score", 0.0) - latest.get("step_operational_score", 0.0)
                 kpi_block("Δ operational score", f"{delta_score:+.3f}")
@@ -1316,9 +1860,9 @@ with tab_sim:
 
             g1, g2 = st.columns(2)
             with g1:
-                st.plotly_chart(make_scatter_compare(latest, projected, ["step_operational_score", "network_speed_index", "risk_score", "bus_bunching_index"], "Scenario comparison"), use_container_width=True)
+                st.plotly_chart(make_scatter_compare(latest, projected, ["step_operational_score", "network_speed_index", "risk_score", "bus_bunching_index"], "Scenario comparison"), use_container_width=True, key="plotly_1452")
             with g2:
-                st.plotly_chart(make_delta_bar(delta_df), use_container_width=True)
+                st.plotly_chart(make_delta_bar(delta_df), use_container_width=True, key="plotly_1454")
 
             rec_cols = st.columns(2)
             with rec_cols[0]:
@@ -1352,21 +1896,27 @@ with tab_audit:
 
         top = st.columns(4)
         with top[0]:
-            kpi_block("Route", ROUTE_LABELS.get(str(row.get("decision_route")), str(row.get("decision_route"))))
+            kpi_block("Route", ROUTE_LABELS.get(str(row.get("decision_route")), str(row.get("decision_route"))), tone=route_tone(str(row.get("decision_route"))))
         with top[1]:
-            kpi_block("Latency", f"{int(row.get('exec_ms', 0))} ms")
+            kpi_block("Latency", f"{int(row.get('exec_ms', 0))} ms", tone=tone_from_value(min(float(row.get('exec_ms',0) or 0)/1200.0,1.0), False))
         with top[2]:
-            kpi_block("Confidence", f"{float(row.get('decision_confidence', 0.0))*100:.1f}%")
+            kpi_block("Confidence", f"{float(row.get('decision_confidence', 0.0))*100:.1f}%", tone=tone_from_value(float(row.get('decision_confidence',0.0) or 0.0), True))
         with top[3]:
-            kpi_block("Score", f"{float(row.get('step_operational_score', 0.0)):.3f}")
+            kpi_block("Score", f"{float(row.get('step_operational_score', 0.0)):.3f}", tone=tone_from_value(float(row.get('step_operational_score',0.0) or 0.0), True))
+
+        render_chip_row([
+            (f"Situation · {row.get('situation_type', '—')}", 'neutral'),
+            (f"Subproblem · {row.get('subproblem_type', '—')}", 'warn'),
+            (f"Action priority · {row.get('action_priority', '—')}", 'alert' if str(row.get('action_priority','')).lower()=='high' else 'warn'),
+        ])
 
         g1, g2, g3 = st.columns(3)
         with g1:
-            st.plotly_chart(make_line(window_df, ["network_speed_index", "corridor_reliability_index"], "Local urban performance"), use_container_width=True)
+            st.plotly_chart(make_line(window_df, ["network_speed_index", "corridor_reliability_index"], "Local urban performance"), use_container_width=True, key="plotly_1504")
         with g2:
-            st.plotly_chart(make_line(window_df, ["risk_score", "near_miss_index", "pedestrian_exposure"], "Local risk window"), use_container_width=True)
+            st.plotly_chart(make_line(window_df, ["risk_score", "near_miss_index", "pedestrian_exposure"], "Local risk window"), use_container_width=True, key="plotly_1506")
         with g3:
-            st.plotly_chart(make_line(window_df, ["bus_bunching_index", "curb_occupancy_rate", "gateway_delay_index"], "Operational pressure window"), use_container_width=True)
+            st.plotly_chart(make_line(window_df, ["bus_bunching_index", "curb_occupancy_rate", "gateway_delay_index"], "Operational pressure window"), use_container_width=True, key="plotly_1508")
 
         details = st.columns([1.05, 1.05, 0.9])
         with details[0]:

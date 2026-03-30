@@ -21,14 +21,10 @@
     },
     "shocks": {
       "demand_spike": {
-        "corridor_flow_multiplier": 1.18,
-        "metro_load_add": 0.1,
-        "rodalies_load_add": 0.08,
-        "interchange_pressure_add": 0.1
+        "corridor_flow_multiplier": 1.18
       },
       "bus_bunching": {
-        "headway_pressure_add": 0.25,
-        "metro_load_add": 0.05
+        "headway_pressure_add": 0.25
       }
     }
   },
@@ -53,16 +49,11 @@
     },
     "shocks": {
       "school_peak": {
-        "ped_flow_multiplier": 1.4,
-        "metro_load_add": 0.08,
-        "fgc_load_add": 0.06,
-        "interchange_pressure_add": 0.08,
-        "pedestrian_wave_add": 0.12
+        "ped_flow_multiplier": 1.4
       },
       "rain_event": {
         "rain_intensity": 0.45,
-        "visibility": 0.7,
-        "airport_rail_pressure_add": 0.04
+        "visibility": 0.7
       }
     }
   },
@@ -88,14 +79,10 @@
     },
     "shocks": {
       "delivery_wave": {
-        "delivery_pressure_add": 0.35,
-        "rodalies_load_add": 0.03,
-        "fgc_load_add": 0.04,
-        "interchange_pressure_add": 0.06
+        "delivery_pressure_add": 0.35
       },
       "illegal_curb_occupation": {
-        "illegal_parking_pressure_add": 0.35,
-        "interchange_pressure_add": 0.04
+        "illegal_parking_pressure_add": 0.35
       }
     }
   },
@@ -120,16 +107,10 @@
     },
     "shocks": {
       "gateway_surge": {
-        "gateway_surge_add": 0.45,
-        "metro_load_add": 0.12,
-        "rodalies_load_add": 0.18,
-        "airport_rail_pressure_add": 0.22,
-        "interchange_pressure_add": 0.12
+        "gateway_surge_add": 0.45
       },
       "incident": {
-        "corridor_flow_multiplier": 1.08,
-        "metro_load_add": 0.06,
-        "rodalies_load_add": 0.08
+        "corridor_flow_multiplier": 1.08
       }
     }
   },
@@ -165,21 +146,14 @@
         "corridor_flow_multiplier": 1.12,
         "ped_flow_multiplier": 1.25,
         "priority_requests_add": 2,
-        "gateway_surge_add": 0.25,
-        "metro_load_add": 0.16,
-        "rodalies_load_add": 0.12,
-        "fgc_load_add": 0.1,
-        "interchange_pressure_add": 0.18,
-        "pedestrian_wave_add": 0.18
+        "gateway_surge_add": 0.25
       },
       "bus_bunching": {
-        "headway_pressure_add": 0.25,
-        "interchange_pressure_add": 0.05
+        "headway_pressure_add": 0.25
       },
       "rain_event": {
         "rain_intensity": 0.45,
-        "visibility": 0.7,
-        "metro_load_add": 0.04
+        "visibility": 0.7
       }
     }
   }

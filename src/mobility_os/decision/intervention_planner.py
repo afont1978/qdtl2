@@ -81,30 +81,6 @@ class InterventionPlanner:
                     "bus_priority_level": 2,
                 },
             )
-        if dominant_subproblem == "interchange_overload_problem":
-            return InterventionPlan(
-                action=f"Activate interchange crowd management package at {hotspot}",
-                action_priority="high",
-                responsible_layer="interchange_operations",
-                expected_impact="Reduce transfer pressure and stabilize multimodal flows.",
-                dispatch_overrides={"interchange_crowd_management": 1, "preventive_alert_level": 1},
-            )
-        if dominant_subproblem == "rail_load_balancing_problem":
-            return InterventionPlan(
-                action=f"Shift pressure towards the most resilient urban rail branch at {hotspot}",
-                action_priority="high",
-                responsible_layer="urban_rail_operations",
-                expected_impact="Lower rail burden on the dominant subsystem and improve interchange stability.",
-                dispatch_overrides={"interchange_crowd_management": 1},
-            )
-        if dominant_subproblem in {"airport_access_multimodal_problem", "rail_disruption_response_problem", "event_evacuation_multimodal_problem"}:
-            return InterventionPlan(
-                action=f"Deploy rail-first multimodal mitigation centred on {hotspot}",
-                action_priority="high",
-                responsible_layer="multimodal_orchestration",
-                expected_impact="Use metro, Rodalies, FGC and bus as a coordinated response backbone.",
-                dispatch_overrides={"diversion_mode": 2, "signal_coordination_mode": 3, "bus_priority_level": 2, "interchange_crowd_management": 1},
-            )
         if dominant_subproblem in {"incident_response_portfolio_problem", "event_release_rebalancing_problem", "multimodal_redispatch_problem"}:
             return InterventionPlan(
                 action=f"Deploy coordinated incident/event response portfolio centred on {hotspot}",
