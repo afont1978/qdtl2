@@ -821,22 +821,116 @@ def render_signals_map(signals_df: pd.DataFrame, height: int = 720) -> None:
         center_lat = float(focused.iloc[0]["lat"])
         center_lon = float(focused.iloc[0]["lon"])
 
-    top_labels = signals_df.sort_values("severity", ascending=False).head(8).copy()
-    top_labels["label_text"] = top_labels["short_label"] + " · " + top_labels["alert_level"].str[:1]
+    work = signals_df.copy()
+    phase_code = {"Emerging": "E", "Active": "A", "Clearing": "C"}
+    work["phase_code"] = work["phase"].map(phase_code).fillna("-")
+    work["label_text"] = work["short_label"] + " · " + work["phase_code"]
 
-    layers = [
-        pdk.Layer(
-            "ScatterplotLayer",
-            data=signals_df,
-            get_position='[lon, lat]',
-            get_fill_color="color",
-            get_radius="radius",
-            pickable=True,
-            auto_highlight=True,
-            stroked=True,
-            get_line_color=[255,255,255,140],
-            line_width_min_pixels=1,
-        ),
+    top_labels = work.sort_values(["severity", "is_primary", "is_focused"], ascending=[False, False, False]).head(8).copy()
+
+    emerging = work[work["phase"] == "Emerging"].copy()
+    active = work[work["phase"] == "Active"].copy()
+    clearing = work[work["phase"] == "Clearing"].copy()
+
+    # phase-specific radii and colors to create visual iconography by state
+    if not emerging.empty:
+        emerging["outer_radius"] = emerging["radius"] * 1.9
+        emerging["inner_radius"] = emerging["radius"] * 0.82
+        emerging["outer_color"] = [[255, 255, 255, 40] for _ in range(len(emerging))]
+        emerging["outline_color"] = [[255, 255, 255, 120] for _ in range(len(emerging))]
+    if not active.empty:
+        active["inner_radius"] = active["radius"] * 0.95
+        active["ring_radius"] = active["radius"] * 1.18
+        active["ring_color"] = [[255, 255, 255, 150] for _ in range(len(active))]
+    if not clearing.empty:
+        clearing["inner_radius"] = clearing["radius"] * 0.72
+        clearing["ring_radius"] = clearing["radius"] * 0.98
+        clearing["ring_color"] = [[180, 190, 205, 110] for _ in range(len(clearing))]
+        clearing["text_color"] = [[210, 215, 225, 160] for _ in range(len(clearing))]
+    else:
+        clearing["text_color"] = []
+
+    layers = []
+
+    if not emerging.empty:
+        layers += [
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=emerging,
+                get_position='[lon, lat]',
+                get_fill_color="outer_color",
+                get_radius="outer_radius",
+                pickable=False,
+                stroked=False,
+                opacity=0.35,
+            ),
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=emerging,
+                get_position='[lon, lat]',
+                get_fill_color="color",
+                get_radius="inner_radius",
+                pickable=True,
+                auto_highlight=True,
+                stroked=True,
+                get_line_color="outline_color",
+                line_width_min_pixels=2,
+            ),
+        ]
+
+    if not active.empty:
+        layers += [
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=active,
+                get_position='[lon, lat]',
+                get_fill_color="ring_color",
+                get_radius="ring_radius",
+                pickable=False,
+                stroked=False,
+                opacity=0.55,
+            ),
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=active,
+                get_position='[lon, lat]',
+                get_fill_color="color",
+                get_radius="inner_radius",
+                pickable=True,
+                auto_highlight=True,
+                stroked=True,
+                get_line_color=[255,255,255,185],
+                line_width_min_pixels=2,
+            ),
+        ]
+
+    if not clearing.empty:
+        layers += [
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=clearing,
+                get_position='[lon, lat]',
+                get_fill_color="ring_color",
+                get_radius="ring_radius",
+                pickable=False,
+                stroked=False,
+                opacity=0.45,
+            ),
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=clearing,
+                get_position='[lon, lat]',
+                get_fill_color="color",
+                get_radius="inner_radius",
+                pickable=True,
+                auto_highlight=True,
+                stroked=True,
+                get_line_color=[210,215,225,110],
+                line_width_min_pixels=1,
+            ),
+        ]
+
+    layers.append(
         pdk.Layer(
             "TextLayer",
             data=top_labels,
@@ -845,9 +939,9 @@ def render_signals_map(signals_df: pd.DataFrame, height: int = 720) -> None:
             get_color=[245,245,245,220],
             get_size=15,
             get_alignment_baseline="bottom",
-            get_pixel_offset=[0, -12],
-        ),
-    ]
+            get_pixel_offset=[0, -14],
+        )
+    )
 
     deck = pdk.Deck(
         map_provider="carto",
@@ -861,11 +955,13 @@ def render_signals_map(signals_df: pd.DataFrame, height: int = 720) -> None:
     try:
         st.pydeck_chart(deck, use_container_width=True, height=height)
     except Exception:
+        fallback = work.copy()
+        fallback["Map marker state"] = fallback["phase"]
         st.dataframe(
-            signals_df[["name", "alert_level", "signal_type", "active_event", "layer_group", "streets", "lat", "lon"]],
+            fallback[["name", "alert_level", "Map marker state", "signal_type", "active_event", "layer_group", "streets", "lat", "lon"]],
             use_container_width=True,
             hide_index=True,
-            height=min(520, 42 + 34 * len(signals_df)),
+            height=min(520, 42 + 34 * len(fallback)),
         )
 
 
