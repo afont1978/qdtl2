@@ -163,6 +163,54 @@ def make_line(df: pd.DataFrame, cols: list[str], title: str, y_title: str = "Ind
     return fig
 
 
+def make_group_bar(df: pd.DataFrame, x: str, y: str, color: str | None, title: str, height: int = 280) -> go.Figure:
+    fig = px.bar(df, x=x, y=y, color=color, template="plotly_dark", title=title)
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=height, showlegend=bool(color))
+    return fig
+
+
+def make_delta_bar(delta_df: pd.DataFrame, top_n: int = 8) -> go.Figure:
+    if delta_df.empty:
+        return go.Figure()
+    plot_df = delta_df.copy()
+    plot_df["abs_delta"] = plot_df["Delta"].abs()
+    plot_df = plot_df.sort_values("abs_delta", ascending=False).head(top_n)
+    fig = px.bar(plot_df, x="Delta", y="Metric", orientation="h", template="plotly_dark", title="Metric deltas", color="Delta", color_continuous_scale="RdBu")
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=320, coloraxis_showscale=False)
+    return fig
+
+
+def make_route_mix_chart(df: pd.DataFrame) -> go.Figure:
+    rc = route_counts(df)
+    if rc.empty:
+        return go.Figure()
+    fig = px.pie(rc, names="route", values="count", template="plotly_dark", title="Route mix", color="route", color_discrete_map=ROUTE_COLORS)
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=280, showlegend=True)
+    return fig
+
+
+def make_window_df(df: pd.DataFrame, idx: int, radius: int = 8) -> pd.DataFrame:
+    if df.empty:
+        return df
+    lo = max(0, idx - radius)
+    hi = min(len(df), idx + radius + 1)
+    return df.iloc[lo:hi].copy()
+
+
+def make_scatter_compare(before: Dict[str, Any], after: Dict[str, Any], metrics: list[str], title: str = "Before vs projected") -> go.Figure:
+    rows = []
+    for m in metrics:
+        if m in before and m in after:
+            rows.append({"Metric": metric_label(m), "State": "Baseline", "Value": float(before[m])})
+            rows.append({"Metric": metric_label(m), "State": "Projected", "Value": float(after[m])})
+    plot_df = pd.DataFrame(rows)
+    if plot_df.empty:
+        return go.Figure()
+    fig = px.bar(plot_df, x="Metric", y="Value", color="State", barmode="group", template="plotly_dark", title=title)
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=340)
+    return fig
+
+
 def build_map_data(hotspots_df: pd.DataFrame, latest: Dict[str, Any], layer_filter: list[str], focused_name: str | None) -> tuple[pd.DataFrame, pd.DataFrame]:
     if hotspots_df.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -219,16 +267,23 @@ def render_hotspot_summary(name: str | None, hotspots_df: pd.DataFrame, scenario
     if not details:
         st.info("No hotspot information available.")
         return
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown(f"### {title}: {details['name']}")
-    st.write(f"**Layer group:** {details['layer_group']}")
-    st.write(f"**Category:** {details['category']}")
-    st.write(f"**Streets / environment:** {details['streets']}")
-    st.write(f"**Operational relevance:** {details['why']}")
-    st.caption(f"Coordinates: {details['lat']:.4f}, {details['lon']:.4f}")
-    if scenario_note:
-        st.caption(str(scenario_note))
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown(f"### {title}")
+    c1, c2 = st.columns([1.15, 0.85])
+    with c1:
+        render_summary_table([
+            ("Name", details["name"]),
+            ("Layer group", details["layer_group"]),
+            ("Category", details["category"]),
+            ("Streets", details["streets"]),
+        ], "Hotspot facts")
+    with c2:
+        render_summary_table([
+            ("Latitude", round(float(details["lat"]), 4)),
+            ("Longitude", round(float(details["lon"]), 4)),
+            ("Scenario anchor", scenario_note or "—"),
+        ], "Location")
+    with st.expander("Context note", expanded=False):
+        st.caption(str(details.get("why", "No additional note available.")))
 
 
 def render_summary_table(rows: list[tuple[str, Any]], title: str) -> None:
@@ -706,40 +761,42 @@ with tab_overview:
         st.info("No simulation data yet.")
     else:
         live_df = df.tail(int(ss["live_window"])).copy()
-        left, right = st.columns([1.8, 1.0])
+        left, right = st.columns([1.7, 1.0])
         with left:
             render_city_map(hotspots_df, latest, height=560, focused_name=focus_name)
         with right:
+            top_right = st.columns(2)
+            with top_right[0]:
+                kpi_block("Route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"))
+            with top_right[1]:
+                kpi_block("Event", str(latest.get("active_event", "none") or "none"))
             render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Focused hotspot")
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown("### Snapshot decision")
-            st.write(f"**Route:** {ROUTE_LABELS.get(str(latest.get('decision_route', '')), '—')}")
-            st.write(f"**Reason:** {latest.get('route_reason', '—')}")
-            st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
-            st.markdown("</div>", unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
+            if not df.empty:
+                st.plotly_chart(make_route_mix_chart(df.tail(max(int(ss["live_window"]), 12))), use_container_width=True)
+        c1, c2, c3 = st.columns(3)
         with c1:
-            st.plotly_chart(make_line(live_df, ["network_speed_index", "corridor_reliability_index", "step_operational_score"], "Urban performance"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["network_speed_index", "corridor_reliability_index"], "Network dynamics"), use_container_width=True)
         with c2:
-            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "curb_occupancy_rate", "risk_score", "gateway_delay_index"], "Pressure indicators"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh"], "Transit dynamics"), use_container_width=True)
+        with c3:
+            st.plotly_chart(make_line(live_df, ["risk_score", "gateway_delay_index", "curb_occupancy_rate"], "Pressure dynamics"), use_container_width=True)
 
 with tab_map:
     st.markdown("## Map & layers")
     if df.empty:
         st.info("No simulation data yet.")
     else:
-        top = st.columns([1.8, 1.0])
+        top = st.columns([1.7, 1.0])
         with top[0]:
             render_city_map(hotspots_df, latest, height=700, focused_name=focus_name)
         with top[1]:
             render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Selected hotspot")
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown("### Active layer filters")
-            st.write(", ".join(ss.get("map_layers", [])) or "No layers selected")
-            st.write(f"**Focus mode:** {ss.get('focus_hotspot_mode', 'Auto (scenario hotspot)')}")
-            st.markdown("</div>", unsafe_allow_html=True)
+            if not hotspots_df.empty:
+                layer_counts = hotspots_df[hotspots_df["layer_group"].isin(ss.get("map_layers", []))]["layer_group"].value_counts().reset_index()
+                layer_counts.columns = ["Layer", "Count"]
+                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Active layer catalogue", height=280), use_container_width=True)
         catalogue = hotspots_df[["name", "layer_group", "category", "streets", "lat", "lon"]].copy() if not hotspots_df.empty else hotspots_df
-        st.dataframe(catalogue, use_container_width=True, height=340)
+        st.dataframe(catalogue, use_container_width=True, height=300)
 
 with tab_twins:
     if df.empty:
@@ -752,30 +809,45 @@ with tab_twins:
         twin_sel = ss["twin_sel"]
         snap = snapshots.get(twin_sel, {})
         md = snap.get("metadata", {}) if isinstance(snap, dict) else {}
-        cols = st.columns([1.2, 1.0])
-        with cols[0]:
-            render_summary_table([
-                ("Twin", twin_sel.replace("_", " ").title()),
-                ("Twin hotspot", md.get("hotspot_name", "—")),
-                ("Category", md.get("category", "—")),
-                ("Streets", md.get("streets", "—")),
-                ("Scenario note", md.get("scenario_note", latest.get("scenario_note", "—"))),
-            ], "Twin identity")
-            render_summary_table([(k, v) for k, v in twin_snapshot_fields(snap)], "Current operational state")
-        with cols[1]:
-            twin_hotspot = md.get("hotspot_name") or focus_name
-            render_hotspot_summary(twin_hotspot, hotspots_df, md.get("scenario_note") or latest.get("scenario_note"), title="Twin hotspot")
+        live_df = df.tail(int(ss["live_window"])).copy()
+
+        metric_map = {
+            "intersection": [["corridor_delay_s", "risk_score"], ["near_miss_index", "pedestrian_exposure"]],
+            "road_corridor": [["network_speed_index", "corridor_reliability_index"], ["corridor_delay_s", "gateway_delay_index"]],
+            "bus_corridor": [["bus_bunching_index", "bus_commercial_speed_kmh"], ["bus_priority_requests", "corridor_reliability_index"]],
+            "curb_zone": [["curb_occupancy_rate", "illegal_curb_occupancy_rate"], ["delivery_queue", "risk_score"]],
+            "risk_hotspot": [["risk_score", "near_miss_index"], ["pedestrian_exposure", "bike_conflict_index"]],
+        }
+
+        grid = st.columns([1.45, 1.45, 1.0])
+        with grid[0]:
+            st.plotly_chart(make_line(live_df, metric_map[twin_sel][0], "Twin trend A"), use_container_width=True)
+        with grid[1]:
+            st.plotly_chart(make_line(live_df, metric_map[twin_sel][1], "Twin trend B"), use_container_width=True)
+        with grid[2]:
+            render_hotspot_summary(md.get("hotspot_name") or focus_name, hotspots_df, md.get("scenario_note") or latest.get("scenario_note"), title="Twin hotspot")
+            twin_rows = [(k, v) for k, v in twin_snapshot_fields(snap)]
+            render_summary_table(twin_rows[:8], "Current metrics")
+
+        if twin_sel == "bus_corridor":
+            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh", "bus_priority_requests"], "Bus corridor focus"), use_container_width=True)
+        elif twin_sel == "curb_zone":
+            st.plotly_chart(make_line(live_df, ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curb zone focus"), use_container_width=True)
+        elif twin_sel == "risk_hotspot":
+            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot focus"), use_container_width=True)
 
 with tab_risk:
     if df.empty:
         st.info("No simulation data yet.")
     else:
         live_df = df.tail(int(ss["live_window"])).copy()
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns([1.0, 1.0, 1.0])
         with c1:
             st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index"], "Risk evolution"), use_container_width=True)
         with c2:
             st.plotly_chart(make_line(live_df, ["pedestrian_exposure", "bike_conflict_index"], "Exposure and conflict"), use_container_width=True)
+        with c3:
+            st.plotly_chart(make_line(live_df, ["corridor_delay_s", "bus_bunching_index", "gateway_delay_index"], "Risk context"), use_container_width=True)
         render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Risk hotspot")
 
 
@@ -784,14 +856,9 @@ with tab_sim:
     if df.empty:
         st.info("Run at least one step before launching a contextual what-if analysis.")
     else:
-        left, right = st.columns([1.0, 1.2])
+        left, right = st.columns([0.95, 1.25])
         with left:
             render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Simulation focus")
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown("### Goal")
-            st.write("Build a quick before / after estimate for the selected hotspot without changing the running simulation.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
             with st.form("what_if_form"):
                 shock = st.selectbox(
                     "Stress or context change",
@@ -843,15 +910,12 @@ with tab_sim:
             with top[2]:
                 kpi_block("Subproblem", projected.get("what_if_subproblem", "—"))
 
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown("### What-if interpretation")
-            st.write(projected.get("what_if_reason", "No explanation available."))
-            st.write(f"**Shock:** {projected.get('what_if_shock', 'None')}")
-            st.write(f"**Focused hotspot:** {projected.get('primary_hotspot_name', focus_name or '—')}")
-            st.markdown("</div>", unsafe_allow_html=True)
+            g1, g2 = st.columns(2)
+            with g1:
+                st.plotly_chart(make_scatter_compare(latest, projected, ["step_operational_score", "network_speed_index", "risk_score", "bus_bunching_index"], "Scenario comparison"), use_container_width=True)
+            with g2:
+                st.plotly_chart(make_delta_bar(delta_df), use_container_width=True)
 
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown("### Recommended operational action")
             rec_cols = st.columns(2)
             with rec_cols[0]:
                 render_summary_table([
@@ -861,26 +925,12 @@ with tab_sim:
                 ], "Action package")
             with rec_cols[1]:
                 render_summary_table([
-                    ("Expected impact", projected.get("recommended_expected_impact", "—")),
                     ("Projected route", ROUTE_LABELS.get(projected.get("what_if_route", "CLASSICAL"), "Classical")),
                     ("Subproblem", projected.get("what_if_subproblem", "—")),
+                    ("Expected impact", projected.get("recommended_expected_impact", "—")),
                 ], "Operational expectation")
-            st.markdown("</div>", unsafe_allow_html=True)
 
-            st.markdown("### Before / after")
-            st.dataframe(delta_df, use_container_width=True, hide_index=True, height=420)
-
-            compare_df = pd.DataFrame({
-                "State": ["Baseline", "Projected"],
-                "Operational score": [latest.get("step_operational_score", 0.0), projected.get("step_operational_score", 0.0)],
-                "Risk": [latest.get("risk_score", 0.0), projected.get("risk_score", 0.0)],
-                "Network speed": [latest.get("network_speed_index", 0.0), projected.get("network_speed_index", 0.0)],
-            })
-            fig = go.Figure()
-            for metric in ["Operational score", "Risk", "Network speed"]:
-                fig.add_trace(go.Bar(x=compare_df["State"], y=compare_df[metric], name=metric))
-            fig.update_layout(template="plotly_dark", title="Scenario comparison", height=320, margin=dict(l=20, r=20, t=50, b=20), barmode="group")
-            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(delta_df, use_container_width=True, hide_index=True, height=380)
 
 with tab_audit:
     if df.empty:
@@ -891,50 +941,66 @@ with tab_audit:
             "decision_route", "exec_ms", "decision_confidence", "step_operational_score", "fallback_triggered"
         ]
         cols_to_show = [c for c in cols_to_show if c in df.columns]
-        st.dataframe(df[cols_to_show].tail(60), use_container_width=True, height=320)
+        st.dataframe(df[cols_to_show].tail(60), use_container_width=True, height=260)
         idx = st.number_input("Record index (0-based)", min_value=0, max_value=max(0, len(df)-1), value=max(0, len(df)-1), step=1)
         row = df.iloc[int(idx)]
-        c1, c2 = st.columns(2)
-        with c1:
+        window_df = make_window_df(df, int(idx), radius=8)
+
+        top = st.columns(4)
+        with top[0]:
+            kpi_block("Route", ROUTE_LABELS.get(str(row.get("decision_route")), str(row.get("decision_route"))))
+        with top[1]:
+            kpi_block("Latency", f"{int(row.get('exec_ms', 0))} ms")
+        with top[2]:
+            kpi_block("Confidence", f"{float(row.get('decision_confidence', 0.0))*100:.1f}%")
+        with top[3]:
+            kpi_block("Score", f"{float(row.get('step_operational_score', 0.0)):.3f}")
+
+        g1, g2, g3 = st.columns(3)
+        with g1:
+            st.plotly_chart(make_line(window_df, ["network_speed_index", "corridor_reliability_index"], "Local urban performance"), use_container_width=True)
+        with g2:
+            st.plotly_chart(make_line(window_df, ["risk_score", "near_miss_index", "pedestrian_exposure"], "Local risk window"), use_container_width=True)
+        with g3:
+            st.plotly_chart(make_line(window_df, ["bus_bunching_index", "curb_occupancy_rate", "gateway_delay_index"], "Operational pressure window"), use_container_width=True)
+
+        details = st.columns([1.05, 1.05, 0.9])
+        with details[0]:
             render_summary_table([
                 ("Step", int(row["step_id"])),
                 ("Mode", MODE_LABELS.get(str(row["mode"]), str(row["mode"]))),
                 ("Scenario", SCENARIO_LABELS.get(str(row["scenario"]), str(row["scenario"]))),
-                ("Active event", row.get("active_event", "none") or "none"),
-                ("Primary hotspot", row.get("primary_hotspot_name", "—")),
-                ("Route", ROUTE_LABELS.get(str(row["decision_route"]), str(row["decision_route"]))),
-                ("Reason", row.get("route_reason", "—")),
-            ], "Decision summary")
-        with c2:
+                ("Event", row.get("active_event", "none") or "none"),
+                ("Hotspot", row.get("primary_hotspot_name", "—")),
+            ], "Record")
+        with details[1]:
             render_summary_table([
                 ("Network speed", float(row.get("network_speed_index", 0.0))),
-                ("Corridor reliability", float(row.get("corridor_reliability_index", 0.0))),
                 ("Bus bunching", float(row.get("bus_bunching_index", 0.0))),
                 ("Curb occupancy", float(row.get("curb_occupancy_rate", 0.0))),
                 ("Risk", float(row.get("risk_score", 0.0))),
                 ("Gateway delay", float(row.get("gateway_delay_index", 0.0))),
-            ], "Urban state snapshot")
-        render_hotspot_summary(row.get("primary_hotspot_name"), hotspots_df, row.get("scenario_note"), title="Audit hotspot")
-        recommendation = recommend_action_from_record(row.to_dict())
-        rec_cols = st.columns(2)
-        with rec_cols[0]:
+            ], "State vector")
+        with details[2]:
+            recommendation = recommend_action_from_record(row.to_dict())
             render_summary_table([
                 ("Action", recommendation["action"]),
                 ("Priority", recommendation["priority"]),
-                ("Responsible layer", recommendation["owner"]),
-            ], "Recommended operational action")
-        with rec_cols[1]:
-            render_summary_table([
-                ("Expected impact", recommendation["expected"]),
+                ("Owner", recommendation["owner"]),
                 ("Subproblem", recommendation["subproblem"]),
-                ("Route note", recommendation["route_note"]),
-            ], "Operational expectation")
+            ], "Recommended action")
+
+        render_hotspot_summary(row.get("primary_hotspot_name"), hotspots_df, row.get("scenario_note"), title="Audit hotspot")
+
         with st.expander("Technical detail"):
-            st.markdown("### Dispatch")
-            st.json(safe_json_loads(row.get("dispatch_json")))
-            st.markdown("### Objective breakdown")
-            st.json(safe_json_loads(row.get("objective_breakdown_json")))
-            st.markdown("### Quantum Request Envelope")
-            st.json(safe_json_loads(row.get("qre_json")) or {"info": "No QRE generated on this step."})
-            st.markdown("### Quantum Result")
-            st.json(safe_json_loads(row.get("result_json")) or {"info": "No quantum result on this step."})
+            tech_cols = st.columns(2)
+            with tech_cols[0]:
+                st.markdown("### Dispatch")
+                st.json(safe_json_loads(row.get("dispatch_json")))
+                st.markdown("### Objective breakdown")
+                st.json(safe_json_loads(row.get("objective_breakdown_json")))
+            with tech_cols[1]:
+                st.markdown("### Quantum Request Envelope")
+                st.json(safe_json_loads(row.get("qre_json")) or {"info": "No QRE generated on this step."})
+                st.markdown("### Quantum Result")
+                st.json(safe_json_loads(row.get("result_json")) or {"info": "No quantum result on this step."})
