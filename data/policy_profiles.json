@@ -1,0 +1,30 @@
+{
+  "balanced": {
+    "traffic": 1.0,
+    "transit": 1.0,
+    "risk": 1.15,
+    "logistics": 0.95,
+    "gateway": 0.9
+  },
+  "safety_first": {
+    "traffic": 0.85,
+    "transit": 0.95,
+    "risk": 1.4,
+    "logistics": 0.85,
+    "gateway": 0.8
+  },
+  "logistics_priority": {
+    "traffic": 0.95,
+    "transit": 0.9,
+    "risk": 1.0,
+    "logistics": 1.35,
+    "gateway": 1.05
+  },
+  "gateway_resilience": {
+    "traffic": 0.9,
+    "transit": 0.95,
+    "risk": 1.05,
+    "logistics": 1.0,
+    "gateway": 1.35
+  }
+}

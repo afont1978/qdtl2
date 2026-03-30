@@ -16,6 +16,9 @@ from ..twins.risk_twins import RiskHotspotTwin
 from ..twins.gateway_twins import GatewayClusterTwin
 from ..utils.io import Hotspot, load_hotspots_csv
 from .state_aggregator import aggregate_city_state, propagate_twin_dependencies
+from .synthetic_city_engine import SyntheticCityEngine
+from .scenario_engine import ScenarioEngine
+from ..utils.io import load_json_data
 from ..decision.situation_interpreter import SituationInterpreter
 from ..decision.problem_decomposer import ProblemDecomposer
 from ..decision.priority_arbiter import PriorityArbiter
@@ -431,7 +434,11 @@ class MobilityRuntime:
         self.rng = np.random.default_rng(self.seed)
         self.step_id = 0
         self.cumulative_operational_score = 0.0
+        self.policy_profile = "balanced"
         self.orchestrator = MobilityHybridOrchestrator(seed=self.seed)
+        self.synthetic_city_engine = SyntheticCityEngine(seed=self.seed, policy_profile=self.policy_profile)
+        self.scenario_engine = ScenarioEngine()
+        self.policy_profiles = load_json_data("policy_profiles.json", default={})
         self.situation_interpreter = SituationInterpreter()
         self.problem_decomposer = ProblemDecomposer()
         self.priority_arbiter = PriorityArbiter()
@@ -550,103 +557,24 @@ class MobilityRuntime:
         return pd.DataFrame(rows)
 
     def _mode_for_scenario(self) -> Mode:
-        if self.scenario == "school_area_risk":
-            return "safety"
-        if self.scenario == "urban_logistics_saturation":
-            return "logistics"
-        if self.scenario == "gateway_access_stress":
-            return "gateway"
-        if self.scenario == "event_mobility":
-            return "event"
-        return "traffic"
+        return self.scenario_engine.mode_for_scenario(self.scenario)
 
     def _generate_base_context(self) -> ScenarioContext:
         mode = self._mode_for_scenario()
-        hour = (self.step_id % 288) / 12.0
-        peak = 1.0 if 7.0 <= hour <= 10.0 or 17.0 <= hour <= 20.0 else 0.0
-        corridor_flow = 3600.0 + 1200.0 * peak + 450.0 * np.sin(hour / 24.0 * 2 * np.pi) + self.rng.normal(0, 120)
-        ped_flow = 550.0 + 320.0 * peak + 120.0 * np.sin((hour + 2.0) / 24.0 * 2 * np.pi) + self.rng.normal(0, 40)
-        bike_flow = 280.0 + 120.0 * np.sin((hour - 1.5) / 24.0 * 2 * np.pi) + self.rng.normal(0, 25)
-        headway_pressure = 0.35 + 0.25 * peak + self.rng.normal(0, 0.03)
-        delivery_pressure = 0.30 + 0.22 * (10.0 <= hour <= 15.0) + self.rng.normal(0, 0.03)
-        illegal_pressure = 0.18 + 0.10 * (11.0 <= hour <= 14.0) + self.rng.normal(0, 0.02)
-        pickup_dropoff_pressure = 0.22 + 0.18 * peak + self.rng.normal(0, 0.02)
-        gateway_surge = 0.15 + 0.18 * peak + self.rng.normal(0, 0.02)
+        base = self.synthetic_city_engine.generate_base_context(self.scenario, self.step_id, mode)
         return ScenarioContext(
             scenario=self.scenario,
             mode=mode,
-            weather={"rain_intensity": 0.0, "visibility": 0.95},
-            demand={
-                "corridor_flow_vph": float(max(1400.0, corridor_flow)),
-                "ped_flow_pph": float(max(100.0, ped_flow)),
-                "bike_flow_pph": float(max(60.0, bike_flow)),
-            },
-            bus_ops={
-                "priority_requests": int(max(0, round(2 + 4 * peak + self.rng.normal(0, 1.0)))),
-                "headway_pressure": float(np.clip(headway_pressure, 0.0, 1.0)),
-            },
-            curb_ops={
-                "delivery_pressure": float(np.clip(delivery_pressure, 0.0, 1.0)),
-                "illegal_parking_pressure": float(np.clip(illegal_pressure, 0.0, 1.0)),
-                "pickup_dropoff_pressure": float(np.clip(pickup_dropoff_pressure, 0.0, 1.0)),
-            },
-            gateway_ops={"surge_factor": float(np.clip(gateway_surge, 0.0, 1.0))},
+            weather=base["weather"],
+            demand=base["demand"],
+            bus_ops=base["bus_ops"],
+            curb_ops=base["curb_ops"],
+            gateway_ops=base["gateway_ops"],
             active_events=[],
         )
 
     def _generate_events(self, ctx: ScenarioContext) -> None:
-        events: List[ScenarioEvent] = []
-        if self.scenario == "corridor_congestion":
-            if self.step_id % 24 in range(7, 12):
-                events.append(ScenarioEvent("demand_spike", 0.7, self.step_id, self.step_id, {}))
-            if self.step_id % 31 in (15, 16):
-                events.append(ScenarioEvent("bus_bunching", 0.6, self.step_id, self.step_id, {}))
-        elif self.scenario == "school_area_risk":
-            if self.step_id % 24 in range(7, 11):
-                events.append(ScenarioEvent("school_peak", 0.9, self.step_id, self.step_id, {}))
-            if self.step_id % 19 == 8:
-                events.append(ScenarioEvent("rain_event", 0.4, self.step_id, self.step_id, {}))
-        elif self.scenario == "urban_logistics_saturation":
-            if self.step_id % 20 in range(8, 14):
-                events.append(ScenarioEvent("delivery_wave", 0.85, self.step_id, self.step_id, {}))
-            if self.step_id % 17 in (5, 6):
-                events.append(ScenarioEvent("illegal_curb_occupation", 0.7, self.step_id, self.step_id, {}))
-        elif self.scenario == "gateway_access_stress":
-            if self.step_id % 22 in range(6, 11):
-                events.append(ScenarioEvent("gateway_surge", 0.8, self.step_id, self.step_id, {}))
-            if self.step_id % 29 == 12:
-                events.append(ScenarioEvent("incident", 0.7, self.step_id, self.step_id, {}))
-        elif self.scenario == "event_mobility":
-            if self.step_id % 26 in range(12, 18):
-                events.append(ScenarioEvent("event_release", 0.95, self.step_id, self.step_id, {}))
-            if self.step_id % 18 in (9, 10):
-                events.append(ScenarioEvent("bus_bunching", 0.65, self.step_id, self.step_id, {}))
-            if self.step_id % 33 == 20:
-                events.append(ScenarioEvent("rain_event", 0.45, self.step_id, self.step_id, {}))
-        ctx.active_events = events
-        for ev in events:
-            if ev.event_type == "demand_spike":
-                ctx.demand["corridor_flow_vph"] *= 1.18
-            elif ev.event_type == "incident":
-                ctx.demand["corridor_flow_vph"] *= 1.08
-            elif ev.event_type == "school_peak":
-                ctx.demand["ped_flow_pph"] *= 1.40
-            elif ev.event_type == "rain_event":
-                ctx.weather["rain_intensity"] = 0.45
-                ctx.weather["visibility"] = 0.70
-            elif ev.event_type == "bus_bunching":
-                ctx.bus_ops["headway_pressure"] = min(1.0, ctx.bus_ops["headway_pressure"] + 0.25)
-            elif ev.event_type == "illegal_curb_occupation":
-                ctx.curb_ops["illegal_parking_pressure"] = min(1.0, ctx.curb_ops["illegal_parking_pressure"] + 0.35)
-            elif ev.event_type == "delivery_wave":
-                ctx.curb_ops["delivery_pressure"] = min(1.0, ctx.curb_ops["delivery_pressure"] + 0.35)
-            elif ev.event_type == "gateway_surge":
-                ctx.gateway_ops["surge_factor"] = min(1.0, ctx.gateway_ops["surge_factor"] + 0.45)
-            elif ev.event_type == "event_release":
-                ctx.demand["corridor_flow_vph"] *= 1.12
-                ctx.demand["ped_flow_pph"] *= 1.25
-                ctx.bus_ops["priority_requests"] += 2
-                ctx.gateway_ops["surge_factor"] = min(1.0, ctx.gateway_ops["surge_factor"] + 0.25)
+        self.scenario_engine.apply(self.scenario, self.step_id, ctx, ScenarioEvent)
 
     def get_context(self) -> ScenarioContext:
         ctx = self._generate_base_context()

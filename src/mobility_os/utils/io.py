@@ -62,3 +62,13 @@ def load_hotspots_csv(explicit_path: Optional[str] = None) -> Dict[str, Hotspot]
             )
             hotspots[hs.name] = hs
     return hotspots
+
+
+
+def load_json_data(filename: str, explicit_path: Optional[str] = None, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    path = resolve_data_path(filename, explicit_path)
+    if not path.exists():
+        return default or {}
+    import json
+    with path.open('r', encoding='utf-8') as f:
+        return json.load(f)

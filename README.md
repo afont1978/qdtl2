@@ -36,3 +36,8 @@ This structured version adds a first modular decision stack:
 - intervention planner
 - validator
 - decision memory
+
+
+## Sprint 6 — Urban Model v2
+
+This version introduces a separated synthetic city engine, a scenario engine and JSON-based demand/scenario/policy profiles under `data/`. The runtime now consumes those modules instead of hardcoding the full urban context inline.

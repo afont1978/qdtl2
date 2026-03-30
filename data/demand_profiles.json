@@ -1,0 +1,57 @@
+{
+  "default": {
+    "morning_peak": {
+      "start": 7.0,
+      "end": 10.0,
+      "weight": 1.0
+    },
+    "evening_peak": {
+      "start": 17.0,
+      "end": 20.0,
+      "weight": 1.0
+    },
+    "school_window": {
+      "start": 7.0,
+      "end": 9.0,
+      "pedestrian_bonus": 0.35
+    },
+    "logistics_window": {
+      "start": 10.0,
+      "end": 15.0,
+      "delivery_bonus": 0.22
+    },
+    "tourism_window": {
+      "start": 11.0,
+      "end": 19.0,
+      "pedestrian_bonus": 0.12,
+      "pickup_dropoff_bonus": 0.08
+    },
+    "night": {
+      "start": 22.0,
+      "end": 5.0,
+      "traffic_multiplier": 0.62
+    }
+  },
+  "zones": {
+    "intermodal_core": {
+      "corridor_base": 3800,
+      "ped_base": 650,
+      "bike_base": 260
+    },
+    "city_centre": {
+      "corridor_base": 3400,
+      "ped_base": 720,
+      "bike_base": 240
+    },
+    "logistics_belt": {
+      "corridor_base": 3600,
+      "ped_base": 300,
+      "bike_base": 120
+    },
+    "gateway_access": {
+      "corridor_base": 3300,
+      "ped_base": 260,
+      "bike_base": 90
+    }
+  }
+}

@@ -1,0 +1,160 @@
+{
+  "corridor_congestion": {
+    "mode": "traffic",
+    "event_schedule": {
+      "demand_spike": {
+        "mod": 24,
+        "range": [
+          7,
+          11
+        ],
+        "severity": 0.7
+      },
+      "bus_bunching": {
+        "mod": 31,
+        "points": [
+          15,
+          16
+        ],
+        "severity": 0.6
+      }
+    },
+    "shocks": {
+      "demand_spike": {
+        "corridor_flow_multiplier": 1.18
+      },
+      "bus_bunching": {
+        "headway_pressure_add": 0.25
+      }
+    }
+  },
+  "school_area_risk": {
+    "mode": "safety",
+    "event_schedule": {
+      "school_peak": {
+        "mod": 24,
+        "range": [
+          7,
+          10
+        ],
+        "severity": 0.9
+      },
+      "rain_event": {
+        "mod": 19,
+        "points": [
+          8
+        ],
+        "severity": 0.4
+      }
+    },
+    "shocks": {
+      "school_peak": {
+        "ped_flow_multiplier": 1.4
+      },
+      "rain_event": {
+        "rain_intensity": 0.45,
+        "visibility": 0.7
+      }
+    }
+  },
+  "urban_logistics_saturation": {
+    "mode": "logistics",
+    "event_schedule": {
+      "delivery_wave": {
+        "mod": 20,
+        "range": [
+          8,
+          13
+        ],
+        "severity": 0.85
+      },
+      "illegal_curb_occupation": {
+        "mod": 17,
+        "points": [
+          5,
+          6
+        ],
+        "severity": 0.7
+      }
+    },
+    "shocks": {
+      "delivery_wave": {
+        "delivery_pressure_add": 0.35
+      },
+      "illegal_curb_occupation": {
+        "illegal_parking_pressure_add": 0.35
+      }
+    }
+  },
+  "gateway_access_stress": {
+    "mode": "gateway",
+    "event_schedule": {
+      "gateway_surge": {
+        "mod": 22,
+        "range": [
+          6,
+          10
+        ],
+        "severity": 0.8
+      },
+      "incident": {
+        "mod": 29,
+        "points": [
+          12
+        ],
+        "severity": 0.7
+      }
+    },
+    "shocks": {
+      "gateway_surge": {
+        "gateway_surge_add": 0.45
+      },
+      "incident": {
+        "corridor_flow_multiplier": 1.08
+      }
+    }
+  },
+  "event_mobility": {
+    "mode": "event",
+    "event_schedule": {
+      "event_release": {
+        "mod": 26,
+        "range": [
+          12,
+          17
+        ],
+        "severity": 0.95
+      },
+      "bus_bunching": {
+        "mod": 18,
+        "points": [
+          9,
+          10
+        ],
+        "severity": 0.65
+      },
+      "rain_event": {
+        "mod": 33,
+        "points": [
+          20
+        ],
+        "severity": 0.45
+      }
+    },
+    "shocks": {
+      "event_release": {
+        "corridor_flow_multiplier": 1.12,
+        "ped_flow_multiplier": 1.25,
+        "priority_requests_add": 2,
+        "gateway_surge_add": 0.25
+      },
+      "bus_bunching": {
+        "headway_pressure_add": 0.25
+      },
+      "rain_event": {
+        "rain_intensity": 0.45,
+        "visibility": 0.7
+      }
+    }
+  }
+}
