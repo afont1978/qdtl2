@@ -212,23 +212,23 @@ def fmt_pct(x: Any) -> str:
     try:
         return f"{float(x)*100:.1f}%"
     except Exception:
-        return "—"
+        return "-"
 
 
 def fmt_num(x: Any, suffix: str = "") -> str:
     try:
         return f"{float(x):.2f}{suffix}"
     except Exception:
-        return "—"
+        return "-"
 
 
-def safe_get(d: Dict[str, Any], key: str, default: Any = "—") -> Any:
+def safe_get(d: Dict[str, Any], key: str, default: Any = "-") -> Any:
     return d.get(key, default) if isinstance(d, dict) else default
 
 
 def render_info_table(title: str, rows: list[tuple[str, str]]) -> None:
     st.markdown(f"### {title}")
-    clean_rows = [{"Campo": k, "Valor": v} for k, v in rows if v not in [None, "", "—"]]
+    clean_rows = [{"Campo": k, "Valor": v} for k, v in rows if v not in [None, "", "-"]]
     if clean_rows:
         st.dataframe(pd.DataFrame(clean_rows), use_container_width=True, hide_index=True)
     else:
@@ -249,8 +249,8 @@ def render_twin_summary(twin_sel: str, snapshot: dict, latest_row: dict) -> None
     category = safe_get(snapshot.get("metadata", {}), "category", "No disponible")
     why = safe_get(snapshot.get("metadata", {}), "why", "No disponible")
 
-    route = format_route(str(latest_row.get("decision_route", ""))) if latest_row else "—"
-    route_reason = latest_row.get("route_reason", "—") if latest_row else "—"
+    route = format_route(str(latest_row.get("decision_route", ""))) if latest_row else "-"
+    route_reason = latest_row.get("route_reason", "-") if latest_row else "-"
 
     title_map = {
         "intersection": "Estado actual del cruce",
@@ -280,7 +280,7 @@ def render_twin_summary(twin_sel: str, snapshot: dict, latest_row: dict) -> None
             [
                 ("Ruta elegida", route),
                 ("Motivo", route_reason),
-                ("Evento activo", latest_row.get("active_event", "none") if latest_row else "—"),
+                ("Evento activo", latest_row.get("active_event", "none") if latest_row else "-"),
             ],
         )
 
@@ -317,7 +317,7 @@ def render_twin_summary(twin_sel: str, snapshot: dict, latest_row: dict) -> None
                 ("Bunching index", fmt_num(snapshot.get("bunching_index"))),
                 ("Velocidad comercial", fmt_num(snapshot.get("commercial_speed_kmh"), " km/h")),
                 ("Ocupación", fmt_num(snapshot.get("occupancy_proxy"))),
-                ("Solicitudes de prioridad", str(snapshot.get("priority_requests_active", "—"))),
+                ("Solicitudes de prioridad", str(snapshot.get("priority_requests_active", "-"))),
             ],
         )
     elif twin_sel == "curb_zone":
