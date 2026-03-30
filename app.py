@@ -33,7 +33,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-BASE_SCENARIO_LABELS = {
+SCENARIO_LABELS = {
     "corridor_congestion": "Corridor congestion",
     "school_area_risk": "School-area safety risk",
     "urban_logistics_saturation": "Urban logistics saturation",
@@ -63,21 +63,7 @@ LAYER_COLORS = {
     "Logistics / curb / port": [255, 127, 0, 170],
     "Airport / gateway": [152, 78, 163, 170],
 }
-
-DATA_CANDIDATES = [
-    Path(__file__).with_name("barcelona_mobility_hotspots.csv"),
-    Path(__file__).parent / "data" / "barcelona_mobility_hotspots.csv",
-]
-SCENARIO_JSON_CANDIDATES = {
-    "base": [
-        Path(__file__).with_name("scenario_library.json"),
-        Path(__file__).parent / "data" / "scenario_library.json",
-    ],
-    "advanced": [
-        Path(__file__).with_name("scenario_library_high_complexity_v2.json"),
-        Path(__file__).parent / "data" / "scenario_library_high_complexity_v2.json",
-    ],
-}
+DATA_PATH = Path(__file__).with_name("barcelona_mobility_hotspots.csv")
 
 
 def init_state() -> None:
@@ -130,59 +116,10 @@ def layer_group(category: str) -> str:
     return "Urban core / tourism"
 
 
-
-
-def resolve_existing_path(candidates: list[Path]) -> Path | None:
-    for p in candidates:
-        if p.exists():
-            return p
-    return None
-
-
-def load_json_file(path: Path | None) -> dict[str, Any]:
-    if path is None:
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def load_combined_scenario_labels() -> dict[str, str]:
-    labels = dict(BASE_SCENARIO_LABELS)
-    base_path = resolve_existing_path(SCENARIO_JSON_CANDIDATES["base"])
-    adv_path = resolve_existing_path(SCENARIO_JSON_CANDIDATES["advanced"])
-    base_data = load_json_file(base_path)
-    adv_data = load_json_file(adv_path)
-
-    if isinstance(base_data, dict):
-        for sid in base_data.keys():
-            if isinstance(base_data.get(sid), dict):
-                labels.setdefault(sid, sid.replace("_", " ").title())
-
-    if isinstance(adv_data, dict) and isinstance(adv_data.get("scenarios"), list):
-        for item in adv_data["scenarios"]:
-            if not isinstance(item, dict):
-                continue
-            sid = item.get("id")
-            title = item.get("title")
-            if sid:
-                labels[sid] = title or sid.replace("_", " ").title()
-    return labels
-
-
-SCENARIO_LABELS = load_combined_scenario_labels()
-
-
-def scenario_title(scenario: str, labels: dict[str, str]) -> str:
-    return labels.get(str(scenario), str(scenario).replace("_", " ").title())
 def load_hotspots() -> pd.DataFrame:
-    data_path = resolve_existing_path(DATA_CANDIDATES)
     try:
-        df = pd.read_csv(data_path) if data_path else pd.DataFrame()
+        df = pd.read_csv(DATA_PATH)
     except Exception:
-        df = pd.DataFrame()
-    if df.empty:
         return pd.DataFrame(columns=["name", "lat", "lon", "category", "streets", "why", "layer_group"])
     df["layer_group"] = df["category"].apply(layer_group)
     return df
@@ -1035,26 +972,14 @@ hotspots_df = load_hotspots()
 
 with st.sidebar:
     st.markdown("## Control panel")
-
-    available_scenarios = list(SCENARIO_LABELS.keys()) if isinstance(SCENARIO_LABELS, dict) and SCENARIO_LABELS else list(BASE_SCENARIO_LABELS.keys())
-    current_scenario = ss.get("scenario", available_scenarios[0] if available_scenarios else "corridor_congestion")
-    if current_scenario not in available_scenarios:
-        current_scenario = available_scenarios[0] if available_scenarios else "corridor_congestion"
-
-    current_seed = ss.get("seed", 42)
-    try:
-        current_seed = int(current_seed)
-    except Exception:
-        current_seed = 42
-
     with st.form("scenario_form"):
         scenario_choice = st.selectbox(
             "Scenario",
-            options=available_scenarios,
-            format_func=lambda x: SCENARIO_LABELS.get(x, x.replace("_", " ").title()),
-            index=available_scenarios.index(current_scenario) if available_scenarios else 0,
+            options=list(SCENARIO_LABELS.keys()),
+            format_func=lambda x: SCENARIO_LABELS[x],
+            index=list(SCENARIO_LABELS.keys()).index(ss["scenario"]),
         )
-        seed_choice = st.number_input("Simulation seed", min_value=1, max_value=999999, value=current_seed, step=1)
+        seed_choice = st.number_input("Simulation seed", min_value=1, max_value=999999, value=int(ss["seed"]), step=1)
         submitted = st.form_submit_button("Apply scenario / seed", use_container_width=True)
         if submitted:
             ss["scenario"] = scenario_choice
@@ -1097,7 +1022,7 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.caption(f"Current scenario: {scenario_title(ss['scenario'], scenario_labels)}")
+    st.caption(f"Current scenario: {SCENARIO_LABELS[ss['scenario']]}")
     st.caption(f"Seed: {ss['seed']}")
     st.caption("Stable live mode: only the top Live Monitor auto-refreshes. The rest of the app stays static to minimize flicker.")
 
@@ -1235,9 +1160,7 @@ with tab_map:
             if not hotspots_df.empty:
                 layer_counts = hotspots_df[hotspots_df["layer_group"].isin(ss.get("map_layers", []))]["layer_group"].value_counts().reset_index()
                 layer_counts.columns = ["Layer", "Count"]
-                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Active layer catalogue", height=280), use_container_width=True, key="map_layers_catalogue")
-                if not df.empty:
-                    st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["metro_pressure_index", "rodalies_pressure_index", "fgc_pressure_index", "interchange_pressure_index"], "Rail / interchange pressure"), use_container_width=True, key="map_rail_pressure")
+                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Active layer catalogue", height=280), use_container_width=True)
         catalogue = hotspots_df[["name", "layer_group", "category", "streets", "lat", "lon"]].copy() if not hotspots_df.empty else hotspots_df
         st.dataframe(catalogue, use_container_width=True, height=300)
 
@@ -1258,7 +1181,7 @@ with tab_signals:
                 top_alerts = signals_df.sort_values(["severity", "name"], ascending=[False, True]).head(6).copy()
                 top_alerts["severity"] = top_alerts["severity"].round(3)
                 render_summary_table([
-                    ("Scenario", scenario_title(str(latest.get("scenario", "")), scenario_labels)),
+                    ("Scenario", SCENARIO_LABELS.get(str(latest.get("scenario", "")), str(latest.get("scenario", "—")))),
                     ("Active event", latest.get("active_event", "none") or "none"),
                     ("Focused hotspot", focus_name or "—"),
                     ("Primary route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—")),
@@ -1284,7 +1207,7 @@ with tab_twins:
         st.info("No simulation data yet.")
     else:
         snapshots = ss["rt"].twin_snapshot()
-        twin_options = ["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot", "metro_station", "metro_line", "rodalies_station", "rodalies_line", "fgc_station", "fgc_line", "interchange_node"]
+        twin_options = ["intersection", "road_corridor", "bus_corridor", "curb_zone", "risk_hotspot"]
         default_twin = ss.get("twin_sel", "intersection")
         ss["twin_sel"] = st.selectbox("Select twin", twin_options, index=twin_options.index(default_twin) if default_twin in twin_options else 0)
         twin_sel = ss["twin_sel"]
@@ -1298,13 +1221,6 @@ with tab_twins:
             "bus_corridor": [["bus_bunching_index", "bus_commercial_speed_kmh"], ["bus_priority_requests", "corridor_reliability_index"]],
             "curb_zone": [["curb_occupancy_rate", "illegal_curb_occupancy_rate"], ["delivery_queue", "risk_score"]],
             "risk_hotspot": [["risk_score", "near_miss_index"], ["pedestrian_exposure", "bike_conflict_index"]],
-            "metro_station": [["metro_pressure_index", "urban_rail_burden"], ["interchange_pressure_index", "city_intermodal_score"]],
-            "metro_line": [["metro_pressure_index", "urban_rail_burden"], ["rail_disruption_pressure", "city_intermodal_score"]],
-            "rodalies_station": [["rodalies_pressure_index", "urban_rail_burden"], ["interchange_pressure_index", "airport_rail_access_pressure"]],
-            "rodalies_line": [["rodalies_pressure_index", "rail_disruption_pressure"], ["airport_rail_access_pressure", "city_intermodal_score"]],
-            "fgc_station": [["fgc_pressure_index", "urban_rail_burden"], ["interchange_pressure_index", "city_intermodal_score"]],
-            "fgc_line": [["fgc_pressure_index", "rail_disruption_pressure"], ["city_intermodal_score", "urban_rail_burden"]],
-            "interchange_node": [["interchange_pressure_index", "city_intermodal_score"], ["urban_rail_burden", "risk_burden"]],
         }
 
         grid = st.columns([1.45, 1.45, 1.0])
@@ -1457,7 +1373,7 @@ with tab_audit:
             render_summary_table([
                 ("Step", int(row["step_id"])),
                 ("Mode", MODE_LABELS.get(str(row["mode"]), str(row["mode"]))),
-                ("Scenario", scenario_title(str(row["scenario"]), scenario_labels)),
+                ("Scenario", SCENARIO_LABELS.get(str(row["scenario"]), str(row["scenario"]))),
                 ("Event", row.get("active_event", "none") or "none"),
                 ("Hotspot", row.get("primary_hotspot_name", "—")),
             ], "Record")
