@@ -600,6 +600,199 @@ def recommend_action_from_record(row: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def build_hotspot_signals(hotspots_df: pd.DataFrame, latest: Dict[str, Any], focused_name: str | None) -> pd.DataFrame:
+    if hotspots_df.empty:
+        return pd.DataFrame()
+
+    records = []
+    primary = (latest or {}).get("primary_hotspot_name")
+    active_event = (latest or {}).get("active_event") or "none"
+    scenario = (latest or {}).get("scenario") or "unknown"
+
+    base_metrics = {
+        "network_speed_index": float((latest or {}).get("network_speed_index", 0.0) or 0.0),
+        "corridor_reliability_index": float((latest or {}).get("corridor_reliability_index", 0.0) or 0.0),
+        "bus_bunching_index": float((latest or {}).get("bus_bunching_index", 0.0) or 0.0),
+        "bus_commercial_speed_kmh": float((latest or {}).get("bus_commercial_speed_kmh", 0.0) or 0.0),
+        "curb_occupancy_rate": float((latest or {}).get("curb_occupancy_rate", 0.0) or 0.0),
+        "illegal_curb_occupancy_rate": float((latest or {}).get("illegal_curb_occupancy_rate", 0.0) or 0.0),
+        "delivery_queue": float((latest or {}).get("delivery_queue", 0.0) or 0.0),
+        "risk_score": float((latest or {}).get("risk_score", 0.0) or 0.0),
+        "near_miss_index": float((latest or {}).get("near_miss_index", 0.0) or 0.0),
+        "pedestrian_exposure": float((latest or {}).get("pedestrian_exposure", 0.0) or 0.0),
+        "gateway_delay_index": float((latest or {}).get("gateway_delay_index", 0.0) or 0.0),
+    }
+
+    def classify(level: float) -> str:
+        if level >= 0.78:
+            return "Critical"
+        if level >= 0.58:
+            return "Alert"
+        if level >= 0.38:
+            return "Watch"
+        return "Normal"
+
+    def color(level_name: str) -> list[int]:
+        return {
+            "Normal": [70, 160, 80, 180],
+            "Watch": [245, 190, 50, 190],
+            "Alert": [245, 120, 35, 210],
+            "Critical": [215, 50, 50, 230],
+        }[level_name]
+
+    for _, row in hotspots_df.iterrows():
+        name = row["name"]
+        layer = row.get("layer_group", "Urban core / tourism")
+        category = str(row.get("category", ""))
+        is_primary = name == primary
+        is_focused = name == focused_name
+
+        emphasis = 1.0
+        if is_primary:
+            emphasis += 0.22
+        if is_focused:
+            emphasis += 0.12
+
+        signal_type = "General urban pressure"
+        short_label = "OBS"
+        relevant_value = 0.0
+        message = "Nominal operating conditions."
+
+        if layer == "Intermodal / public transport":
+            relevant_value = max(base_metrics["bus_bunching_index"], 1.0 - min(base_metrics["corridor_reliability_index"], 1.0))
+            signal_type = "Transit and corridor stress"
+            short_label = "BUS"
+            message = f"Bus bunching {base_metrics['bus_bunching_index']:.2f}; corridor reliability {base_metrics['corridor_reliability_index']:.2f}."
+        elif layer == "Logistics / curb / port":
+            relevant_value = max(
+                0.55 * base_metrics["curb_occupancy_rate"] + 0.45 * base_metrics["illegal_curb_occupancy_rate"],
+                min(base_metrics["delivery_queue"] / 15.0, 1.0),
+                base_metrics["gateway_delay_index"] * 0.9,
+            )
+            signal_type = "Logistics and curbside pressure"
+            short_label = "LOG"
+            message = f"Curb occupancy {base_metrics['curb_occupancy_rate']:.2f}; illegal use {base_metrics['illegal_curb_occupancy_rate']:.2f}; queue {base_metrics['delivery_queue']:.1f}."
+        elif layer == "Airport / gateway":
+            relevant_value = max(base_metrics["gateway_delay_index"], 0.7 * (1.0 - min(base_metrics["network_speed_index"], 1.0)))
+            signal_type = "Gateway access pressure"
+            short_label = "GTW"
+            message = f"Gateway delay {base_metrics['gateway_delay_index']:.2f}; network speed {base_metrics['network_speed_index']:.2f}."
+        else:
+            relevant_value = max(base_metrics["risk_score"], base_metrics["near_miss_index"], 0.9 * base_metrics["pedestrian_exposure"])
+            signal_type = "Urban safety and pedestrian pressure"
+            short_label = "RSK"
+            message = f"Risk {base_metrics['risk_score']:.2f}; near-miss {base_metrics['near_miss_index']:.2f}; pedestrian exposure {base_metrics['pedestrian_exposure']:.2f}."
+
+        if active_event in {"incident", "event_release", "gateway_surge", "delivery_wave", "school_peak", "rain_event", "bus_bunching"}:
+            relevant_value += 0.08 if is_primary or is_focused else 0.03
+
+        severity = max(0.0, min(1.0, relevant_value * emphasis))
+        level = classify(severity)
+        records.append({
+            "name": name,
+            "lat": float(row["lat"]),
+            "lon": float(row["lon"]),
+            "category": category,
+            "streets": row.get("streets", ""),
+            "layer_group": layer,
+            "is_primary": is_primary,
+            "is_focused": is_focused,
+            "signal_type": signal_type,
+            "short_label": short_label,
+            "severity": severity,
+            "alert_level": level,
+            "color": color(level),
+            "radius": 160 + 220 * severity + (90 if is_primary else 0) + (60 if is_focused else 0),
+            "active_event": active_event,
+            "message": message,
+            "scenario": scenario,
+        })
+    return pd.DataFrame(records)
+
+
+def make_alert_level_chart(signals_df: pd.DataFrame) -> go.Figure:
+    if signals_df.empty:
+        return go.Figure()
+    counts = signals_df["alert_level"].value_counts().reindex(["Critical", "Alert", "Watch", "Normal"], fill_value=0).reset_index()
+    counts.columns = ["Alert level", "Count"]
+    fig = px.bar(
+        counts,
+        x="Alert level",
+        y="Count",
+        color="Alert level",
+        template="plotly_dark",
+        title="Alert level distribution",
+        color_discrete_map={
+            "Critical": "#d73232",
+            "Alert": "#f57824",
+            "Watch": "#f5be32",
+            "Normal": "#46a050",
+        },
+    )
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=280, showlegend=False)
+    return fig
+
+
+def render_signals_map(signals_df: pd.DataFrame, height: int = 720) -> None:
+    if signals_df.empty:
+        st.info("No dynamic hotspot signals available.")
+        return
+
+    center_lat = float(signals_df["lat"].mean())
+    center_lon = float(signals_df["lon"].mean())
+    focused = signals_df[signals_df["is_focused"] | signals_df["is_primary"]]
+    if not focused.empty:
+        center_lat = float(focused.iloc[0]["lat"])
+        center_lon = float(focused.iloc[0]["lon"])
+
+    top_labels = signals_df.sort_values("severity", ascending=False).head(8).copy()
+    top_labels["label_text"] = top_labels["short_label"] + " · " + top_labels["alert_level"].str[:1]
+
+    layers = [
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=signals_df,
+            get_position='[lon, lat]',
+            get_fill_color="color",
+            get_radius="radius",
+            pickable=True,
+            auto_highlight=True,
+            stroked=True,
+            get_line_color=[255,255,255,140],
+            line_width_min_pixels=1,
+        ),
+        pdk.Layer(
+            "TextLayer",
+            data=top_labels,
+            get_position='[lon, lat]',
+            get_text="label_text",
+            get_color=[245,245,245,220],
+            get_size=15,
+            get_alignment_baseline="bottom",
+            get_pixel_offset=[0, -12],
+        ),
+    ]
+
+    deck = pdk.Deck(
+        map_provider="carto",
+        map_style="dark",
+        initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11.9, pitch=0),
+        layers=layers,
+        tooltip={
+            "html": "<b>{name}</b><br/><b>{alert_level}</b> · {signal_type}<br/>{message}<br/><b>Event:</b> {active_event}<br/><b>Layer:</b> {layer_group}<br/>{streets}",
+        },
+    )
+    try:
+        st.pydeck_chart(deck, use_container_width=True, height=height)
+    except Exception:
+        st.dataframe(
+            signals_df[["name", "alert_level", "signal_type", "active_event", "layer_group", "streets", "lat", "lon"]],
+            use_container_width=True,
+            hide_index=True,
+            height=min(520, 42 + 34 * len(signals_df)),
+        )
+
+
 
 init_state()
 ss = st.session_state
@@ -747,9 +940,10 @@ df = get_df()
 latest = latest_record(df)
 focus_name = selected_hotspot_name(latest)
 
-tab_overview, tab_map, tab_twins, tab_risk, tab_sim, tab_audit = st.tabs([
+tab_overview, tab_map, tab_signals, tab_twins, tab_risk, tab_sim, tab_audit = st.tabs([
     "Overview snapshot",
     "Map & Layers",
+    "Signals & Alerts Map",
     "Mobility Twins",
     "Risk & Prevention",
     "What-if & Simulation",
@@ -797,6 +991,44 @@ with tab_map:
                 st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Active layer catalogue", height=280), use_container_width=True)
         catalogue = hotspots_df[["name", "layer_group", "category", "streets", "lat", "lon"]].copy() if not hotspots_df.empty else hotspots_df
         st.dataframe(catalogue, use_container_width=True, height=300)
+
+
+with tab_signals:
+    st.markdown("## Signals & Alerts Map")
+    if df.empty:
+        st.info("No simulation data yet.")
+    else:
+        signals_df = build_hotspot_signals(hotspots_df, latest, focus_name)
+        if signals_df.empty:
+            st.info("No signal layer available.")
+        else:
+            left, right = st.columns([1.8, 1.0])
+            with left:
+                render_signals_map(signals_df, height=760)
+            with right:
+                top_alerts = signals_df.sort_values(["severity", "name"], ascending=[False, True]).head(6).copy()
+                top_alerts["severity"] = top_alerts["severity"].round(3)
+                render_summary_table([
+                    ("Scenario", SCENARIO_LABELS.get(str(latest.get("scenario", "")), str(latest.get("scenario", "—")))),
+                    ("Active event", latest.get("active_event", "none") or "none"),
+                    ("Focused hotspot", focus_name or "—"),
+                    ("Primary route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—")),
+                ], "Operational context")
+                st.plotly_chart(make_alert_level_chart(signals_df), use_container_width=True)
+                st.dataframe(
+                    top_alerts[["name", "alert_level", "signal_type", "active_event", "severity"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=260,
+                )
+
+            info_cols = st.columns(3)
+            with info_cols[0]:
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["risk_score", "near_miss_index"], "Risk signal trend"), use_container_width=True)
+            with info_cols[1]:
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["bus_bunching_index", "corridor_reliability_index"], "Transit signal trend"), use_container_width=True)
+            with info_cols[2]:
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "gateway_delay_index"], "Curb / gateway trend"), use_container_width=True)
 
 with tab_twins:
     if df.empty:
