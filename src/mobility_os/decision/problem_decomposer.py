@@ -69,6 +69,11 @@ class ProblemDecomposer:
                 "Coordinate gateway inflow, staging and access metering."
             ))
             subproblems.append(Subproblem(
+                "airport_access_multimodal_problem",
+                0.84,
+                "Coordinate gateway, rail and bus access around airport/port pressure."
+            ))
+            subproblems.append(Subproblem(
                 "multimodal_redispatch_problem",
                 0.76,
                 "Rebalance arrivals across modes and surrounding corridors."
@@ -79,6 +84,29 @@ class ProblemDecomposer:
                 "event_release_rebalancing_problem",
                 0.88,
                 "Disperse post-event demand through tactical multimodal measures."
+            ))
+            subproblems.append(Subproblem(
+                "event_evacuation_multimodal_problem",
+                0.80,
+                "Use rail, bus and pedestrian management to evacuate demand through interchanges."
+            ))
+
+        if state.get("urban_rail_burden", 0.0) > 0.48 or state.get("interchange_pressure_index", 0.0) > 0.50:
+            subproblems.append(Subproblem(
+                "interchange_overload_problem",
+                0.84,
+                "Manage transfer load, pedestrian waves and multimodal access at major hubs."
+            ))
+            subproblems.append(Subproblem(
+                "rail_load_balancing_problem",
+                0.78,
+                "Redistribute rail demand and relieve the most pressured subsystem."
+            ))
+        if state.get("rail_disruption_pressure", 0.0) > 0.32:
+            subproblems.append(Subproblem(
+                "rail_disruption_response_problem",
+                0.82,
+                "Coordinate tactical mitigation for degraded rail operations."
             ))
 
         if not subproblems:
