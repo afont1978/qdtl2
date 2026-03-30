@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from mobility_runtime import MobilityRuntime
+from src.mobility_os.ui.live_monitor import render_live_monitor, live_focus_options
 
 st.set_page_config(page_title="Hybrid Quantum-Classical Urban Mobility Control Room", layout="wide")
 
@@ -665,104 +666,6 @@ def _native_line(df_local: pd.DataFrame, cols: dict[str, str]) -> pd.DataFrame:
     return out
 
 
-def render_live_monitor_native(df_local: pd.DataFrame, latest_local: Dict[str, Any], focus: str) -> None:
-    st.markdown('### Live Monitor')
-    if df_local.empty:
-        st.info('No live data yet. Press Step or Start.')
-        return
-
-    live_df = df_local.tail(int(st.session_state['live_window'])).copy()
-    if 'step_id' in live_df.columns:
-        live_df = live_df.set_index('step_id')
-
-    q_share = (df_local['decision_route'] == 'QUANTUM').mean() * 100.0 if len(df_local) else 0.0
-    fb_rate = df_local['fallback_triggered'].mean() * 100.0 if len(df_local) else 0.0
-    avg_latency = float(df_local['exec_ms'].tail(24).mean()) if len(df_local) else 0.0
-
-    row = st.columns(5)
-    row[0].metric('Mode', MODE_LABELS.get(str(latest_local.get('mode', '')), str(latest_local.get('mode', ''))))
-    row[1].metric('Active event', str(latest_local.get('active_event') or 'none'))
-    row[2].metric('Route', str(latest_local.get('decision_route', '-')))
-    row[3].metric('Quantum share', f'{q_share:.1f}%')
-    row[4].metric('Avg latency', f'{avg_latency:.0f} ms', f'Fallback {fb_rate:.1f}%')
-
-    if focus == 'Overview':
-        c1, c2 = st.columns(2)
-        with c1:
-            chart_df = _native_line(live_df, {
-                'network_speed_index': 'Network speed',
-                'corridor_reliability_index': 'Corridor reliability',
-                'step_operational_score': 'Operational score',
-            })
-            st.line_chart(chart_df, height=280, use_container_width=True)
-        with c2:
-            chart_df = _native_line(live_df, {
-                'bus_bunching_index': 'Bus bunching',
-                'curb_occupancy_rate': 'Curb occupancy',
-                'risk_score': 'Risk score',
-            })
-            st.line_chart(chart_df, height=280, use_container_width=True)
-    elif focus == 'Mobility Twins':
-        twin_sel = st.session_state.get('mobility_twin_sel', 'intersection')
-        st.caption(f'Live focus: {twin_sel}')
-        c1, c2 = st.columns(2)
-        if twin_sel == 'intersection':
-            with c1:
-                st.line_chart(_native_line(live_df, {'corridor_delay_s': 'Delay s'}), height=260, use_container_width=True)
-            with c2:
-                st.line_chart(_native_line(live_df, {'risk_score': 'Risk'}), height=260, use_container_width=True)
-        elif twin_sel == 'road_corridor':
-            with c1:
-                st.line_chart(_native_line(live_df, {
-                    'network_speed_index': 'Speed index',
-                    'corridor_reliability_index': 'Reliability',
-                }), height=260, use_container_width=True)
-            with c2:
-                st.line_chart(_native_line(live_df, {'gateway_delay_index': 'Gateway delay'}), height=260, use_container_width=True)
-        elif twin_sel == 'bus_corridor':
-            with c1:
-                st.line_chart(_native_line(live_df, {'bus_bunching_index': 'Bunching'}), height=260, use_container_width=True)
-            with c2:
-                st.line_chart(_native_line(live_df, {
-                    'bus_commercial_speed_kmh': 'Commercial speed',
-                    'bus_priority_requests': 'Priority requests',
-                }), height=260, use_container_width=True)
-        elif twin_sel == 'curb_zone':
-            with c1:
-                st.line_chart(_native_line(live_df, {
-                    'curb_occupancy_rate': 'Occupancy',
-                    'illegal_curb_occupancy_rate': 'Illegal occupancy',
-                }), height=260, use_container_width=True)
-            with c2:
-                st.line_chart(_native_line(live_df, {'delivery_queue': 'Delivery queue'}), height=260, use_container_width=True)
-        else:
-            with c1:
-                st.line_chart(_native_line(live_df, {
-                    'risk_score': 'Risk',
-                    'near_miss_index': 'Near-miss',
-                }), height=260, use_container_width=True)
-            with c2:
-                st.line_chart(_native_line(live_df, {
-                    'pedestrian_exposure': 'Ped exposure',
-                    'bike_conflict_index': 'Bike conflict',
-                }), height=260, use_container_width=True)
-    else:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.line_chart(_native_line(live_df, {
-                'risk_score': 'Risk',
-                'near_miss_index': 'Near-miss',
-            }), height=260, use_container_width=True)
-        with c2:
-            st.line_chart(_native_line(live_df, {
-                'pedestrian_exposure': 'Ped exposure',
-                'bike_conflict_index': 'Bike conflict',
-            }), height=260, use_container_width=True)
-
-    if latest_local.get('route_reason'):
-        st.caption(str(latest_local.get('route_reason')))
-
-
 @st.fragment(run_every=0.7)
 def detailed_overview_live_fragment() -> None:
     df_local = get_df()
@@ -914,7 +817,10 @@ with st.sidebar:
 
     st.divider()
     ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
-    ss["live_focus"] = st.selectbox("Live focus", ["Overview", "Mobility Twins", "Risk & Prevention"], index=["Overview", "Mobility Twins", "Risk & Prevention"].index(ss["live_focus"]))
+    _live_opts = live_focus_options()
+    if ss["live_focus"] not in _live_opts:
+        ss["live_focus"] = _live_opts[0]
+    ss["live_focus"] = st.selectbox("Live focus", _live_opts, index=_live_opts.index(ss["live_focus"]))
 
     st.divider()
     c1, c2 = st.columns(2)
@@ -954,7 +860,7 @@ def live_fragment() -> None:
         ss["rt"].step()
     frag_df = get_df()
     frag_latest = latest_record(frag_df)
-    render_live_monitor_native(frag_df, frag_latest, ss["live_focus"])
+    render_live_monitor(frag_df, frag_latest, ss["live_focus"])
 
 live_fragment()
 
