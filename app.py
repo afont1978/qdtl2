@@ -171,9 +171,6 @@ def load_combined_scenario_labels() -> dict[str, str]:
     return labels
 
 
-SCENARIO_LABELS = load_combined_scenario_labels()
-
-
 def scenario_title(scenario: str, labels: dict[str, str]) -> str:
     return labels.get(str(scenario), str(scenario).replace("_", " ").title())
 def load_hotspots() -> pd.DataFrame:
