@@ -1196,7 +1196,7 @@ def live_monitor_fragment():
     with c1:
         st.line_chart(live_df.set_index("step_id")[[c for c in ["network_speed_index", "corridor_reliability_index", "step_operational_score"] if c in live_df.columns]], use_container_width=True)
     with c2:
-        st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True)
+        st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True, key="plotly_1199")
     c3, c4 = st.columns(2)
     with c3:
         st.line_chart(live_df.set_index("step_id")[[c for c in ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"] if c in live_df.columns]], use_container_width=True)
@@ -1250,14 +1250,14 @@ with tab_overview:
                 kpi_block("Event", str(latest.get("active_event", "none") or "none"), tone="alert" if (latest.get("active_event") not in [None, "none"]) else "dim")
             render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Focused hotspot")
             if not df.empty:
-                st.plotly_chart(make_route_mix_chart(df.tail(max(int(ss["live_window"]), 12))), use_container_width=True)
+                st.plotly_chart(make_route_mix_chart(df.tail(max(int(ss["live_window"]), 12))), use_container_width=True, key="plotly_1253")
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.plotly_chart(make_line(live_df, ["network_speed_index", "corridor_reliability_index"], "Network dynamics"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["network_speed_index", "corridor_reliability_index"], "Network dynamics"), use_container_width=True, key="plotly_1256")
         with c2:
-            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh"], "Transit dynamics"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh"], "Transit dynamics"), use_container_width=True, key="plotly_1258")
         with c3:
-            st.plotly_chart(make_line(live_df, ["risk_score", "gateway_delay_index", "curb_occupancy_rate"], "Pressure dynamics"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["risk_score", "gateway_delay_index", "curb_occupancy_rate"], "Pressure dynamics"), use_container_width=True, key="plotly_1260")
 
 with tab_map:
     st.markdown("## Map & layers")
@@ -1272,8 +1272,8 @@ with tab_map:
             if not hotspots_df.empty:
                 layer_counts = hotspots_df[hotspots_df["layer_group"].isin(ss.get("map_layers", []))]["layer_group"].value_counts().reset_index()
                 layer_counts.columns = ["Layer", "Count"]
-                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Layer catalogue", height=240), use_container_width=True)
-                st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True)
+                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Layer catalogue", height=240), use_container_width=True, key="plotly_1275")
+                st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True, key="plotly_1276")
         catalogue = hotspots_df[["name", "layer_group", "category", "streets", "lat", "lon"]].copy() if not hotspots_df.empty else hotspots_df
         st.dataframe(catalogue, use_container_width=True, height=300)
 
@@ -1299,7 +1299,7 @@ with tab_signals:
                     ("Focused hotspot", focus_name or "—"),
                     ("Primary route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—")),
                 ], "Operational context")
-                st.plotly_chart(make_alert_level_chart(signals_df), use_container_width=True)
+                st.plotly_chart(make_alert_level_chart(signals_df), use_container_width=True, key="plotly_1302")
                 st.dataframe(
                     top_alerts[["name", "alert_level", "phase", "signal_type", "active_event", "severity"]],
                     use_container_width=True,
@@ -1309,11 +1309,11 @@ with tab_signals:
 
             info_cols = st.columns(3)
             with info_cols[0]:
-                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["risk_score", "near_miss_index"], "Risk signal trend"), use_container_width=True)
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["risk_score", "near_miss_index"], "Risk signal trend"), use_container_width=True, key="plotly_1312")
             with info_cols[1]:
-                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["bus_bunching_index", "corridor_reliability_index"], "Transit signal trend"), use_container_width=True)
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["bus_bunching_index", "corridor_reliability_index"], "Transit signal trend"), use_container_width=True, key="plotly_1314")
             with info_cols[2]:
-                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "gateway_delay_index"], "Curb / gateway trend"), use_container_width=True)
+                st.plotly_chart(make_line(df.tail(int(ss["live_window"])), ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "gateway_delay_index"], "Curb / gateway trend"), use_container_width=True, key="plotly_1316")
 
 with tab_twins:
     if df.empty:
@@ -1338,9 +1338,9 @@ with tab_twins:
 
         grid = st.columns([1.45, 1.45, 1.0])
         with grid[0]:
-            st.plotly_chart(make_line(live_df, metric_map[twin_sel][0], "Twin trend A"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, metric_map[twin_sel][0], "Twin trend A"), use_container_width=True, key="plotly_1341")
         with grid[1]:
-            st.plotly_chart(make_line(live_df, metric_map[twin_sel][1], "Twin trend B"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, metric_map[twin_sel][1], "Twin trend B"), use_container_width=True, key="plotly_1343")
         with grid[2]:
             render_hotspot_summary(md.get("hotspot_name") or focus_name, hotspots_df, md.get("scenario_note") or latest.get("scenario_note"), title="Twin hotspot")
             render_chip_row([
@@ -1353,11 +1353,11 @@ with tab_twins:
             render_summary_table(twin_rows[:8], "Key metrics")
 
         if twin_sel == "bus_corridor":
-            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh", "bus_priority_requests"], "Bus corridor focus"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh", "bus_priority_requests"], "Bus corridor focus"), use_container_width=True, key="plotly_1356")
         elif twin_sel == "curb_zone":
-            st.plotly_chart(make_line(live_df, ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curb zone focus"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"], "Curb zone focus"), use_container_width=True, key="plotly_1358")
         elif twin_sel == "risk_hotspot":
-            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot focus"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index", "pedestrian_exposure", "bike_conflict_index"], "Risk hotspot focus"), use_container_width=True, key="plotly_1360")
 
 with tab_risk:
     if df.empty:
@@ -1375,11 +1375,11 @@ with tab_risk:
             kpi_block("Gateway pressure", f"{latest.get('gateway_delay_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('gateway_delay_index',0.0) or 0.0), False))
         c1, c2, c3 = st.columns([1.0, 1.0, 1.0])
         with c1:
-            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index"], "Risk evolution"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index"], "Risk evolution"), use_container_width=True, key="plotly_1378")
         with c2:
-            st.plotly_chart(make_line(live_df, ["pedestrian_exposure", "bike_conflict_index"], "Exposure and conflict"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["pedestrian_exposure", "bike_conflict_index"], "Exposure and conflict"), use_container_width=True, key="plotly_1380")
         with c3:
-            st.plotly_chart(make_line(live_df, ["corridor_delay_s", "bus_bunching_index", "gateway_delay_index"], "Risk context"), use_container_width=True)
+            st.plotly_chart(make_line(live_df, ["corridor_delay_s", "bus_bunching_index", "gateway_delay_index"], "Risk context"), use_container_width=True, key="plotly_1382")
         render_chip_row([
             (f"Dominant risk · {latest.get('dominant_risk_type', '—')}", 'alert'),
             (f"Phase · {latest.get('risk_phase', '—')}", 'warn'),
@@ -1449,9 +1449,9 @@ with tab_sim:
 
             g1, g2 = st.columns(2)
             with g1:
-                st.plotly_chart(make_scatter_compare(latest, projected, ["step_operational_score", "network_speed_index", "risk_score", "bus_bunching_index"], "Scenario comparison"), use_container_width=True)
+                st.plotly_chart(make_scatter_compare(latest, projected, ["step_operational_score", "network_speed_index", "risk_score", "bus_bunching_index"], "Scenario comparison"), use_container_width=True, key="plotly_1452")
             with g2:
-                st.plotly_chart(make_delta_bar(delta_df), use_container_width=True)
+                st.plotly_chart(make_delta_bar(delta_df), use_container_width=True, key="plotly_1454")
 
             rec_cols = st.columns(2)
             with rec_cols[0]:
@@ -1501,11 +1501,11 @@ with tab_audit:
 
         g1, g2, g3 = st.columns(3)
         with g1:
-            st.plotly_chart(make_line(window_df, ["network_speed_index", "corridor_reliability_index"], "Local urban performance"), use_container_width=True)
+            st.plotly_chart(make_line(window_df, ["network_speed_index", "corridor_reliability_index"], "Local urban performance"), use_container_width=True, key="plotly_1504")
         with g2:
-            st.plotly_chart(make_line(window_df, ["risk_score", "near_miss_index", "pedestrian_exposure"], "Local risk window"), use_container_width=True)
+            st.plotly_chart(make_line(window_df, ["risk_score", "near_miss_index", "pedestrian_exposure"], "Local risk window"), use_container_width=True, key="plotly_1506")
         with g3:
-            st.plotly_chart(make_line(window_df, ["bus_bunching_index", "curb_occupancy_rate", "gateway_delay_index"], "Operational pressure window"), use_container_width=True)
+            st.plotly_chart(make_line(window_df, ["bus_bunching_index", "curb_occupancy_rate", "gateway_delay_index"], "Operational pressure window"), use_container_width=True, key="plotly_1508")
 
         details = st.columns([1.05, 1.05, 0.9])
         with details[0]:
