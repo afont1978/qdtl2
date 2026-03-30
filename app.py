@@ -18,16 +18,35 @@ st.set_page_config(page_title="Barcelona Mobility Control Room v5", layout="wide
 st.markdown(
     """
     <style>
-    .block-container {max-width: 1660px; padding-top: 1rem; padding-bottom: 1.2rem;}
-    .hero {padding: 1rem 1.2rem; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px;
-           background: linear-gradient(135deg, rgba(18,28,45,0.96), rgba(8,13,24,0.96)); margin-bottom: 1rem;}
-    .hero-title {font-size: 2rem; font-weight: 700; color: #F4F7FB; margin-bottom: 0.2rem;}
-    .hero-subtitle {font-size: 1rem; color: #C7D0DD;}
-    .metric-card {padding: 0.75rem 0.95rem; border-radius: 16px; background: rgba(255,255,255,0.03);
-                  border: 1px solid rgba(255,255,255,0.06);}
-    .section-card {padding: 0.85rem 1rem; border-radius: 16px; background: rgba(255,255,255,0.03);
-                   border: 1px solid rgba(255,255,255,0.06);}
-    .small-note {font-size: 0.92rem; color: #B7C3D6;}
+    .block-container {max-width: 1680px; padding-top: 0.85rem; padding-bottom: 1.3rem;}
+    .hero {padding: 1.05rem 1.2rem; border: 1px solid rgba(255,255,255,0.07); border-radius: 22px;
+           background: radial-gradient(circle at top left, rgba(38,53,83,0.96), rgba(11,16,26,0.98) 60%);
+           margin-bottom: 1rem; box-shadow: 0 12px 28px rgba(0,0,0,0.25);}
+    .hero-title {font-size: 2rem; font-weight: 750; color: #F4F7FB; margin-bottom: 0.15rem; letter-spacing: 0.01em;}
+    .hero-subtitle {font-size: 0.98rem; color: #C9D4E3; line-height: 1.4;}
+    .metric-shell {padding: 0.8rem 0.95rem; border-radius: 18px; background: linear-gradient(180deg, rgba(255,255,255,0.038), rgba(255,255,255,0.02));
+                   border: 1px solid rgba(255,255,255,0.07); min-height: 110px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);}
+    .metric-shell::before {content: ''; display: block; height: 4px; border-radius: 8px; margin: -0.25rem -0.25rem 0.6rem -0.25rem;}
+    .metric-shell.neutral::before {background: linear-gradient(90deg, #6baed6, #4e79a7);}
+    .metric-shell.good::before {background: linear-gradient(90deg, #5ad66f, #2ca25f);}
+    .metric-shell.warn::before {background: linear-gradient(90deg, #ffd166, #f39c12);}
+    .metric-shell.alert::before {background: linear-gradient(90deg, #ff8a65, #e74c3c);}
+    .metric-eyebrow {font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; color: #95A7BF; margin-bottom: 0.45rem;}
+    .metric-value {font-size: 1.6rem; font-weight: 730; color: #F7FAFF; line-height: 1.1;}
+    .metric-delta {font-size: 0.85rem; color: #B8C6D8; margin-top: 0.4rem;}
+    .section-card {padding: 0.85rem 1rem; border-radius: 18px; background: rgba(255,255,255,0.028);
+                   border: 1px solid rgba(255,255,255,0.06); box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);}
+    .section-title {font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; color: #9FB0C6; margin-bottom: 0.55rem;}
+    .small-note {font-size: 0.88rem; color: #AFC0D4;}
+    .chip-row {display:flex; gap:0.45rem; flex-wrap:wrap; margin:0.2rem 0 0.75rem 0;}
+    .chip {display:inline-flex; align-items:center; gap:0.35rem; padding:0.26rem 0.58rem; border-radius:999px; font-size:0.78rem; font-weight:600; border:1px solid rgba(255,255,255,0.07);}
+    .chip.neutral {background:rgba(94,138,196,0.16); color:#dbe8ff;}
+    .chip.good {background:rgba(76,175,80,0.16); color:#e6ffe8;}
+    .chip.warn {background:rgba(255,193,7,0.16); color:#fff3cc;}
+    .chip.alert {background:rgba(244,67,54,0.16); color:#ffdede;}
+    .chip.dim {background:rgba(255,255,255,0.06); color:#d0dae6;}
+    .subgrid-note {font-size: 0.84rem; color: #B7C3D6;}
+    div[data-testid="stDataFrame"] div[role="table"] {border-radius: 14px; overflow: hidden;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -63,7 +82,20 @@ LAYER_COLORS = {
     "Logistics / curb / port": [255, 127, 0, 170],
     "Airport / gateway": [152, 78, 163, 170],
 }
-DATA_PATH = Path(__file__).with_name("barcelona_mobility_hotspots.csv")
+def resolve_hotspots_path() -> Path:
+    candidates = [
+        Path(__file__).with_name("barcelona_mobility_hotspots.csv"),
+        Path(__file__).parent / "data" / "barcelona_mobility_hotspots.csv",
+        Path.cwd() / "barcelona_mobility_hotspots.csv",
+        Path.cwd() / "data" / "barcelona_mobility_hotspots.csv",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+
+DATA_PATH = resolve_hotspots_path()
 
 
 def init_state() -> None:
@@ -132,10 +164,53 @@ def selected_hotspot_name(latest: Dict[str, Any]) -> str | None:
     return mode
 
 
-def kpi_block(label: str, value: str, delta: str = "") -> None:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric(label, value, delta)
-    st.markdown("</div>", unsafe_allow_html=True)
+def chip(text: str, tone: str = "neutral") -> str:
+    return f'<span class="chip {tone}">{text}</span>'
+
+
+def kpi_block(label: str, value: str, delta: str = "", tone: str = "neutral") -> None:
+    st.markdown(
+        f"""
+        <div class="metric-shell {tone}">
+          <div class="metric-eyebrow">{label}</div>
+          <div class="metric-value">{value}</div>
+          <div class="metric-delta">{delta or '&nbsp;'}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def tone_from_value(value: float, higher_is_better: bool = True) -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return "neutral"
+    if higher_is_better:
+        if v >= 0.75:
+            return "good"
+        if v >= 0.5:
+            return "neutral"
+        if v >= 0.3:
+            return "warn"
+        return "alert"
+    else:
+        if v <= 0.25:
+            return "good"
+        if v <= 0.45:
+            return "neutral"
+        if v <= 0.65:
+            return "warn"
+        return "alert"
+
+
+def route_tone(route: str) -> str:
+    return {"CLASSICAL": "neutral", "QUANTUM": "warn", "FALLBACK_CLASSICAL": "alert"}.get(route, "neutral")
+
+
+def render_chip_row(items: list[tuple[str, str]]) -> None:
+    html = '<div class="chip-row">' + ''.join(chip(text, tone) for text, tone in items if text) + '</div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def route_counts(df: pd.DataFrame) -> pd.DataFrame:
@@ -184,8 +259,37 @@ def make_route_mix_chart(df: pd.DataFrame) -> go.Figure:
     rc = route_counts(df)
     if rc.empty:
         return go.Figure()
-    fig = px.pie(rc, names="route", values="count", template="plotly_dark", title="Route mix", color="route", color_discrete_map=ROUTE_COLORS)
+    fig = px.pie(rc, names="route", values="count", hole=0.58, template="plotly_dark", title="Route mix", color="route", color_discrete_map=ROUTE_COLORS)
     fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=280, showlegend=True)
+    return fig
+
+
+def make_subsystem_score_chart(latest: Dict[str, Any]) -> go.Figure:
+    if not latest:
+        return go.Figure()
+    curb_pressure = 0.55 * float(latest.get("curb_occupancy_rate", 0.0) or 0.0) + 0.45 * float(latest.get("illegal_curb_occupancy_rate", 0.0) or 0.0)
+    data = pd.DataFrame({
+        "Subsystem": ["Traffic", "Transit", "Risk", "Logistics", "Gateway"],
+        "Score": [
+            float(latest.get("network_speed_index", 0.0) or 0.0),
+            max(0.0, 1.0 - float(latest.get("bus_bunching_index", 0.0) or 0.0)),
+            max(0.0, 1.0 - float(latest.get("risk_score", 0.0) or 0.0)),
+            max(0.0, 1.0 - curb_pressure),
+            max(0.0, 1.0 - float(latest.get("gateway_delay_index", 0.0) or 0.0)),
+        ],
+    })
+    fig = px.bar(data, x="Score", y="Subsystem", orientation="h", template="plotly_dark", title="Subsystem scoreboard", color="Subsystem", color_discrete_sequence=["#4E79A7", "#53C6D9", "#F06565", "#9C6ADE", "#F39C12"])
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=300, showlegend=False, xaxis_range=[0,1.05])
+    return fig
+
+
+def make_signal_phase_chart(signals_df: pd.DataFrame) -> go.Figure:
+    if signals_df.empty:
+        return go.Figure()
+    counts = signals_df["phase"].value_counts().reindex(["Emerging","Active","Clearing"], fill_value=0).reset_index()
+    counts.columns = ["Phase", "Count"]
+    fig = px.bar(counts, x="Phase", y="Count", template="plotly_dark", title="Signal phases", color="Phase", color_discrete_map={"Emerging":"#ffd166","Active":"#ff6b6b","Clearing":"#95a5a6"})
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False)
     return fig
 
 
@@ -268,21 +372,24 @@ def render_hotspot_summary(name: str | None, hotspots_df: pd.DataFrame, scenario
         st.info("No hotspot information available.")
         return
     st.markdown(f"### {title}")
-    c1, c2 = st.columns([1.15, 0.85])
+    render_chip_row([
+        (str(details.get("layer_group", "—")), "neutral"),
+        (str(details.get("category", "—")), "dim"),
+        (f"{float(details.get('lat', 0.0)):.3f}, {float(details.get('lon', 0.0)):.3f}", "dim"),
+    ])
+    c1, c2 = st.columns([1.35, 0.85])
     with c1:
-        render_summary_table([
-            ("Name", details["name"]),
-            ("Layer group", details["layer_group"]),
-            ("Category", details["category"]),
-            ("Streets", details["streets"]),
-        ], "Hotspot facts")
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Location</div>', unsafe_allow_html=True)
+        st.markdown(f"**{details['name']}**")
+        st.caption(str(details.get("streets", "—")))
+        st.markdown("</div>", unsafe_allow_html=True)
     with c2:
-        render_summary_table([
-            ("Latitude", round(float(details["lat"]), 4)),
-            ("Longitude", round(float(details["lon"]), 4)),
-            ("Scenario anchor", scenario_note or "—"),
-        ], "Location")
-    with st.expander("Context note", expanded=False):
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Scenario anchor</div>', unsafe_allow_html=True)
+        st.write(scenario_note or "—")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with st.expander("Operational context", expanded=False):
         st.caption(str(details.get("why", "No additional note available.")))
 
 
@@ -1024,13 +1131,12 @@ with st.sidebar:
     st.divider()
     st.caption(f"Current scenario: {SCENARIO_LABELS[ss['scenario']]}")
     st.caption(f"Seed: {ss['seed']}")
-    st.caption("Stable live mode: only the top Live Monitor auto-refreshes. The rest of the app stays static to minimize flicker.")
 
 st.markdown(
     """
     <div class="hero">
       <div class="hero-title">Barcelona Mobility Control Room</div>
-      <div class="hero-subtitle">Version 5 — stable real-time architecture. A dedicated Live Monitor auto-refreshes while detailed views stay static to minimize flicker.</div>
+      <div class="hero-subtitle">Operational dashboard for synthetic Barcelona mobility: traffic, transit, risk, logistics, gateways, alerts and contextual what-if.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1054,40 +1160,43 @@ def live_monitor_fragment():
 
     row1 = st.columns(6)
     with row1[0]:
-        kpi_block("Mode", MODE_LABELS.get(str(latest.get("mode", "")), str(latest.get("mode", "—"))))
+        kpi_block("Mode", MODE_LABELS.get(str(latest.get("mode", "")), str(latest.get("mode", "—"))), tone="neutral")
     with row1[1]:
-        kpi_block("Network speed", f"{latest.get('network_speed_index', 0.0):.2f}")
+        kpi_block("Network speed", f"{latest.get('network_speed_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('network_speed_index',0.0) or 0.0), True))
     with row1[2]:
-        kpi_block("Corridor reliability", f"{latest.get('corridor_reliability_index', 0.0):.2f}")
+        kpi_block("Corridor reliability", f"{latest.get('corridor_reliability_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('corridor_reliability_index',0.0) or 0.0), True))
     with row1[3]:
-        kpi_block("Bus bunching", f"{latest.get('bus_bunching_index', 0.0):.2f}")
+        kpi_block("Bus bunching", f"{latest.get('bus_bunching_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('bus_bunching_index',0.0) or 0.0), False))
     with row1[4]:
-        kpi_block("Risk", f"{latest.get('risk_score', 0.0):.2f}")
+        kpi_block("Risk", f"{latest.get('risk_score', 0.0):.2f}", tone=tone_from_value(float(latest.get('risk_score',0.0) or 0.0), False))
     with row1[5]:
-        kpi_block("Gateway delay", f"{latest.get('gateway_delay_index', 0.0):.2f}")
+        kpi_block("Gateway delay", f"{latest.get('gateway_delay_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('gateway_delay_index',0.0) or 0.0), False))
 
     row2 = st.columns(5)
     with row2[0]:
-        kpi_block("Decision route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"))
+        kpi_block("Decision route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"), tone=route_tone(str(latest.get("decision_route", ""))))
     with row2[1]:
-        kpi_block("Confidence", f"{float(latest.get('decision_confidence', 0.0))*100:.1f}%")
+        kpi_block("Confidence", f"{float(latest.get('decision_confidence', 0.0))*100:.1f}%", tone=tone_from_value(float(latest.get('decision_confidence',0.0) or 0.0), True))
     with row2[2]:
-        kpi_block("Latency", f"{int(latest.get('exec_ms', 0))} ms")
+        kpi_block("Latency", f"{int(latest.get('exec_ms', 0))} ms", tone=tone_from_value(min(float(latest.get('exec_ms',0) or 0)/1200.0,1.0), False))
     with row2[3]:
         q_share = (df["decision_route"] == "QUANTUM").mean() * 100.0 if "decision_route" in df.columns else 0.0
-        kpi_block("Quantum share", f"{q_share:.1f}%")
+        kpi_block("Quantum share", f"{q_share:.1f}%", tone="warn" if q_share > 20 else "neutral")
     with row2[4]:
         fb_rate = df["fallback_triggered"].mean() * 100.0 if "fallback_triggered" in df.columns else 0.0
-        kpi_block("Fallback rate", f"{fb_rate:.1f}%")
-
-    st.caption("This is the only auto-refreshing surface. Streamlit fragments rerun independently of the full app, which keeps the rest of the interface stable and reduces flicker. However, elements inside the fragment are still redrawn on each fragment rerun, so keeping this live area lightweight is important. See Streamlit fragments docs. citeturn0search0turn0search2")
+        kpi_block("Fallback rate", f"{fb_rate:.1f}%", tone=tone_from_value(min(fb_rate/100.0,1.0), False))
 
     live_df = df.tail(int(st.session_state.get("live_window", 36))).copy()
-    c1, c2 = st.columns(2)
+    render_chip_row([
+        (f"Hotspot · {latest.get('primary_hotspot_name', '—')}", "neutral"),
+        (f"Event · {latest.get('active_event', 'none') or 'none'}", "alert" if (latest.get('active_event') not in [None, 'none']) else "dim"),
+        (f"Action · {latest.get('recommended_action', 'n/a')}", "warn"),
+    ])
+    c1, c2 = st.columns([1.25, 1.0])
     with c1:
         st.line_chart(live_df.set_index("step_id")[[c for c in ["network_speed_index", "corridor_reliability_index", "step_operational_score"] if c in live_df.columns]], use_container_width=True)
     with c2:
-        st.line_chart(live_df.set_index("step_id")[[c for c in ["bus_bunching_index", "risk_score", "gateway_delay_index"] if c in live_df.columns]], use_container_width=True)
+        st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True)
     c3, c4 = st.columns(2)
     with c3:
         st.line_chart(live_df.set_index("step_id")[[c for c in ["curb_occupancy_rate", "illegal_curb_occupancy_rate", "delivery_queue"] if c in live_df.columns]], use_container_width=True)
@@ -1099,11 +1208,14 @@ def live_monitor_fragment():
         render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Focused hotspot")
     with detail_right:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.markdown("### Current live decision")
-        st.write(f"**Route:** {ROUTE_LABELS.get(str(latest.get('decision_route', '')), '—')}")
-        st.write(f"**Reason:** {latest.get('route_reason', '—')}")
-        st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
-        st.write(f"**Primary hotspot:** {latest.get('primary_hotspot_name', '—')}")
+        st.markdown('<div class="section-title">Current live decision</div>', unsafe_allow_html=True)
+        render_chip_row([
+            (ROUTE_LABELS.get(str(latest.get('decision_route', '')), '—'), route_tone(str(latest.get('decision_route', '')))),
+            (f"Priority · {latest.get('action_priority', '—')}", "warn"),
+            (f"Owner · {latest.get('responsible_layer', '—')}", "dim"),
+        ])
+        st.write(latest.get('recommended_action', '—'))
+        st.caption(latest.get('expected_impact', latest.get('route_reason', '—')))
         st.markdown("</div>", unsafe_allow_html=True)
 
 live_monitor_fragment()
@@ -1113,7 +1225,7 @@ latest = latest_record(df)
 focus_name = selected_hotspot_name(latest)
 
 tab_overview, tab_map, tab_signals, tab_twins, tab_risk, tab_sim, tab_audit = st.tabs([
-    "Overview snapshot",
+    "Overview",
     "Map & Layers",
     "Signals & Alerts Map",
     "Mobility Twins",
@@ -1133,9 +1245,9 @@ with tab_overview:
         with right:
             top_right = st.columns(2)
             with top_right[0]:
-                kpi_block("Route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"))
+                kpi_block("Route", ROUTE_LABELS.get(str(latest.get("decision_route", "")), "—"), tone=route_tone(str(latest.get("decision_route", ""))))
             with top_right[1]:
-                kpi_block("Event", str(latest.get("active_event", "none") or "none"))
+                kpi_block("Event", str(latest.get("active_event", "none") or "none"), tone="alert" if (latest.get("active_event") not in [None, "none"]) else "dim")
             render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Focused hotspot")
             if not df.empty:
                 st.plotly_chart(make_route_mix_chart(df.tail(max(int(ss["live_window"]), 12))), use_container_width=True)
@@ -1160,7 +1272,8 @@ with tab_map:
             if not hotspots_df.empty:
                 layer_counts = hotspots_df[hotspots_df["layer_group"].isin(ss.get("map_layers", []))]["layer_group"].value_counts().reset_index()
                 layer_counts.columns = ["Layer", "Count"]
-                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Active layer catalogue", height=280), use_container_width=True)
+                st.plotly_chart(make_group_bar(layer_counts, "Layer", "Count", None, "Layer catalogue", height=240), use_container_width=True)
+                st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True)
         catalogue = hotspots_df[["name", "layer_group", "category", "streets", "lat", "lon"]].copy() if not hotspots_df.empty else hotspots_df
         st.dataframe(catalogue, use_container_width=True, height=300)
 
@@ -1230,8 +1343,14 @@ with tab_twins:
             st.plotly_chart(make_line(live_df, metric_map[twin_sel][1], "Twin trend B"), use_container_width=True)
         with grid[2]:
             render_hotspot_summary(md.get("hotspot_name") or focus_name, hotspots_df, md.get("scenario_note") or latest.get("scenario_note"), title="Twin hotspot")
+            render_chip_row([
+                (f"Status · {snap.get('operational_status', '—')}", 'neutral'),
+                (f"Pressure · {snap.get('pressure_level', '—')}", 'warn'),
+                (f"Trend · {snap.get('trend_state', '—')}", 'dim'),
+                (f"Action · {snap.get('action_active', '—')}", 'alert' if snap.get('action_active') not in [None,'none','None','—'] else 'dim'),
+            ])
             twin_rows = [(k, v) for k, v in twin_snapshot_fields(snap)]
-            render_summary_table(twin_rows[:8], "Current metrics")
+            render_summary_table(twin_rows[:8], "Key metrics")
 
         if twin_sel == "bus_corridor":
             st.plotly_chart(make_line(live_df, ["bus_bunching_index", "bus_commercial_speed_kmh", "bus_priority_requests"], "Bus corridor focus"), use_container_width=True)
@@ -1245,6 +1364,15 @@ with tab_risk:
         st.info("No simulation data yet.")
     else:
         live_df = df.tail(int(ss["live_window"])).copy()
+        risk_row = st.columns(4)
+        with risk_row[0]:
+            kpi_block("Risk", f"{latest.get('risk_score', 0.0):.2f}", tone=tone_from_value(float(latest.get('risk_score',0.0) or 0.0), False))
+        with risk_row[1]:
+            kpi_block("Near-miss", f"{latest.get('near_miss_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('near_miss_index',0.0) or 0.0), False))
+        with risk_row[2]:
+            kpi_block("Pedestrian exposure", f"{latest.get('pedestrian_exposure', 0.0):.2f}", tone=tone_from_value(float(latest.get('pedestrian_exposure',0.0) or 0.0), False))
+        with risk_row[3]:
+            kpi_block("Gateway pressure", f"{latest.get('gateway_delay_index', 0.0):.2f}", tone=tone_from_value(float(latest.get('gateway_delay_index',0.0) or 0.0), False))
         c1, c2, c3 = st.columns([1.0, 1.0, 1.0])
         with c1:
             st.plotly_chart(make_line(live_df, ["risk_score", "near_miss_index"], "Risk evolution"), use_container_width=True)
@@ -1252,6 +1380,11 @@ with tab_risk:
             st.plotly_chart(make_line(live_df, ["pedestrian_exposure", "bike_conflict_index"], "Exposure and conflict"), use_container_width=True)
         with c3:
             st.plotly_chart(make_line(live_df, ["corridor_delay_s", "bus_bunching_index", "gateway_delay_index"], "Risk context"), use_container_width=True)
+        render_chip_row([
+            (f"Dominant risk · {latest.get('dominant_risk_type', '—')}", 'alert'),
+            (f"Phase · {latest.get('risk_phase', '—')}", 'warn'),
+            (f"Forecast · {latest.get('risk_forecast_trend', '—')}", 'neutral'),
+        ])
         render_hotspot_summary(focus_name, hotspots_df, latest.get("scenario_note"), title="Risk hotspot")
 
 
@@ -1307,7 +1440,7 @@ with tab_sim:
             )
             top = st.columns(3)
             with top[0]:
-                kpi_block("Projected route", ROUTE_LABELS.get(projected.get("what_if_route", "CLASSICAL"), "Classical"))
+                kpi_block("Projected route", ROUTE_LABELS.get(projected.get("what_if_route", "CLASSICAL"), "Classical"), tone=route_tone(projected.get("what_if_route", "CLASSICAL")))
             with top[1]:
                 delta_score = projected.get("step_operational_score", 0.0) - latest.get("step_operational_score", 0.0)
                 kpi_block("Δ operational score", f"{delta_score:+.3f}")
@@ -1352,13 +1485,19 @@ with tab_audit:
 
         top = st.columns(4)
         with top[0]:
-            kpi_block("Route", ROUTE_LABELS.get(str(row.get("decision_route")), str(row.get("decision_route"))))
+            kpi_block("Route", ROUTE_LABELS.get(str(row.get("decision_route")), str(row.get("decision_route"))), tone=route_tone(str(row.get("decision_route"))))
         with top[1]:
-            kpi_block("Latency", f"{int(row.get('exec_ms', 0))} ms")
+            kpi_block("Latency", f"{int(row.get('exec_ms', 0))} ms", tone=tone_from_value(min(float(row.get('exec_ms',0) or 0)/1200.0,1.0), False))
         with top[2]:
-            kpi_block("Confidence", f"{float(row.get('decision_confidence', 0.0))*100:.1f}%")
+            kpi_block("Confidence", f"{float(row.get('decision_confidence', 0.0))*100:.1f}%", tone=tone_from_value(float(row.get('decision_confidence',0.0) or 0.0), True))
         with top[3]:
-            kpi_block("Score", f"{float(row.get('step_operational_score', 0.0)):.3f}")
+            kpi_block("Score", f"{float(row.get('step_operational_score', 0.0)):.3f}", tone=tone_from_value(float(row.get('step_operational_score',0.0) or 0.0), True))
+
+        render_chip_row([
+            (f"Situation · {row.get('situation_type', '—')}", 'neutral'),
+            (f"Subproblem · {row.get('subproblem_type', '—')}", 'warn'),
+            (f"Action priority · {row.get('action_priority', '—')}", 'alert' if str(row.get('action_priority','')).lower()=='high' else 'warn'),
+        ])
 
         g1, g2, g3 = st.columns(3)
         with g1:
