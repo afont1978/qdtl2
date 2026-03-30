@@ -352,11 +352,93 @@ def project_what_if(latest: Dict[str, Any], focused_name: str | None, controls: 
         subproblem = "safety_protection_problem"
         complexity = 5.2
 
+    hotspot_lower = (focused_name or proj.get("primary_hotspot_name") or "").lower()
+    asset_focus = "gateway" if any(k in hotspot_lower for k in ["aeropuerto", "port", "moll", "terminal", "plaça cerdà", "zona franca"]) else (
+        "intermodal" if any(k in hotspot_lower for k in ["glòries", "espanya", "catalunya", "sants"]) else "urban_node"
+    )
+
+    rec_action = "Maintain current operational package"
+    rec_priority = "Medium"
+    rec_expected = "Stabilise the hotspot without major side effects."
+    rec_owner = "Urban operations"
+
+    if shock == "Incident on corridor":
+        if diversion:
+            rec_action = "Activate corridor diversion package and coordinated signal plan"
+            rec_expected = "Reduce corridor delay and protect network reliability at the cost of slightly higher local curb pressure."
+        else:
+            rec_action = "Deploy incident response corridor plan with selective diversion"
+            rec_expected = "Contain delay propagation and queue spillback around the hotspot."
+        rec_priority = "High"
+        rec_owner = "Traffic control"
+    elif shock == "Rain event":
+        if ped_protection:
+            rec_action = "Enable pedestrian protection and temporary speed mitigation"
+            rec_expected = "Lower risk and near-miss exposure, with a moderate penalty in corridor speed."
+        else:
+            rec_action = "Prepare wet-weather safety plan and monitor vulnerable-user exposure"
+            rec_expected = "Prevent risk escalation while preserving base traffic coordination."
+        rec_priority = "High"
+        rec_owner = "Safety operations"
+    elif shock == "School peak":
+        rec_action = "Activate school-area protection package and crossing supervision logic"
+        rec_expected = "Reduce pedestrian exposure and conflict around the hotspot during the peak window."
+        rec_priority = "High"
+        rec_owner = "Safety operations"
+    elif shock == "Delivery wave":
+        if enforcement > 0:
+            rec_action = "Tighten curbside enforcement and reallocate DUM slots"
+            rec_expected = "Reduce illegal curb use and delivery queue pressure in the selected hotspot."
+        else:
+            rec_action = "Reallocate delivery windows and prioritise legal curbside turnover"
+            rec_expected = "Contain logistics saturation while limiting pedestrian conflict."
+        rec_priority = "High"
+        rec_owner = "Logistics / curbside"
+    elif shock == "Gateway surge":
+        rec_action = "Activate gateway staging and access metering package"
+        rec_expected = "Reduce gateway delay and smooth arrivals/departures across the selected access node."
+        rec_priority = "High"
+        rec_owner = "Gateway operations"
+    elif shock == "Event release":
+        rec_action = "Launch event dispersal package with multimodal rebalancing"
+        rec_expected = "Absorb the post-event surge with better corridor reliability and bus regularity."
+        rec_priority = "High"
+        rec_owner = "Event mobility"
+    elif bus_priority >= 2:
+        rec_action = "Increase bus priority and coordinated holding on the focused corridor"
+        rec_expected = "Improve regularity and reduce bunching, with manageable side effects on general traffic."
+        rec_priority = "Medium"
+        rec_owner = "Transit operations"
+    elif enforcement >= 1:
+        rec_action = "Increase curbside enforcement around the hotspot"
+        rec_expected = "Reduce illegal occupancy and improve logistics turnover."
+        rec_priority = "Medium"
+        rec_owner = "Logistics / curbside"
+    elif ped_protection:
+        rec_action = "Enable local pedestrian protection mode"
+        rec_expected = "Lower exposure and near-miss indicators around the hotspot."
+        rec_priority = "Medium"
+        rec_owner = "Safety operations"
+    elif diversion:
+        rec_action = "Apply targeted re-routing for the focused hotspot"
+        rec_expected = "Relieve corridor delay and improve reliability, with limited spillover elsewhere."
+        rec_priority = "Medium"
+        rec_owner = "Traffic control"
+
+    if asset_focus == "gateway" and shock in {"Gateway surge", "Incident on corridor"}:
+        rec_action += " with gateway-specific coordination"
+    elif asset_focus == "intermodal" and bus_priority >= 1:
+        rec_action += " and intermodal priority tuning"
+
     proj["what_if_route"] = route
     proj["what_if_reason"] = reason
     proj["what_if_subproblem"] = subproblem
     proj["what_if_complexity"] = complexity
     proj["what_if_shock"] = shock
+    proj["recommended_action"] = rec_action
+    proj["recommended_priority"] = rec_priority
+    proj["recommended_expected_impact"] = rec_expected
+    proj["recommended_owner"] = rec_owner
     return proj
 
 
@@ -678,6 +760,23 @@ with tab_sim:
             st.write(projected.get("what_if_reason", "No explanation available."))
             st.write(f"**Shock:** {projected.get('what_if_shock', 'None')}")
             st.write(f"**Focused hotspot:** {projected.get('primary_hotspot_name', focus_name or '—')}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown("### Recommended operational action")
+            rec_cols = st.columns(2)
+            with rec_cols[0]:
+                render_summary_table([
+                    ("Action", projected.get("recommended_action", "—")),
+                    ("Priority", projected.get("recommended_priority", "—")),
+                    ("Responsible layer", projected.get("recommended_owner", "—")),
+                ], "Action package")
+            with rec_cols[1]:
+                render_summary_table([
+                    ("Expected impact", projected.get("recommended_expected_impact", "—")),
+                    ("Projected route", ROUTE_LABELS.get(projected.get("what_if_route", "CLASSICAL"), "Classical")),
+                    ("Subproblem", projected.get("what_if_subproblem", "—")),
+                ], "Operational expectation")
             st.markdown("</div>", unsafe_allow_html=True)
 
             st.markdown("### Before / after")
