@@ -7,15 +7,56 @@ from typing import Any, Dict, List
 from ..utils.io import load_json_data
 
 
+def _normalize_library(raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    # Base library already comes as {scenario_id: config}
+    if 'scenarios' not in raw:
+        return {k: v for k, v in raw.items() if isinstance(v, dict)}
+    # Advanced library comes as metadata + scenarios: [ ... ]
+    out: Dict[str, Dict[str, Any]] = {}
+    scenarios = raw.get('scenarios', [])
+    if isinstance(scenarios, list):
+        for item in scenarios:
+            if not isinstance(item, dict):
+                continue
+            sid = item.get('id')
+            if sid:
+                out[str(sid)] = item
+    return out
+
+
 @dataclass
 class ScenarioEngine:
     def __post_init__(self) -> None:
-        base_library = load_json_data('scenario_library.json', default={})
-        advanced_library = load_json_data('scenario_library_high_complexity_v2.json', default={})
-        self.scenario_library = {**base_library, **advanced_library}
+        base_library_raw = load_json_data('scenario_library.json', default={})
+        advanced_library_raw = load_json_data('scenario_library_high_complexity_v2.json', default={})
+        base_library = _normalize_library(base_library_raw)
+        advanced_library = _normalize_library(advanced_library_raw)
+        self.scenario_library: Dict[str, Dict[str, Any]] = {**base_library, **advanced_library}
+
+    def list_available_scenarios(self) -> List[str]:
+        return list(self.scenario_library.keys())
+
+    def scenario_source(self, scenario: str) -> str:
+        cfg = self.scenario_library.get(scenario, {})
+        return 'advanced' if 'complexity' in cfg or 'primary_hotspots' in cfg else 'base'
 
     def mode_for_scenario(self, scenario: str) -> str:
-        return self.scenario_library.get(scenario, {}).get('mode', 'traffic')
+        cfg = self.scenario_library.get(scenario, {})
+        if 'mode' in cfg:
+            return cfg.get('mode', 'traffic')
+        # infer mode for advanced scenarios
+        sid = str(scenario)
+        if any(k in sid for k in ['school', 'visibility']):
+            return 'safety'
+        if any(k in sid for k in ['logistics', 'truck', 'port']):
+            return 'logistics'
+        if any(k in sid for k in ['airport', 'gateway']):
+            return 'gateway'
+        if any(k in sid for k in ['event', 'tourism', 'extreme']):
+            return 'event'
+        return 'traffic'
 
     def build_events(self, scenario: str, step_id: int):
         return self.scenario_library.get(scenario, {}).get('event_schedule', {})
@@ -24,8 +65,18 @@ class ScenarioEngine:
         config = self.scenario_library.get(scenario, {})
         schedule = config.get('event_schedule', {})
         shocks = config.get('shocks', {})
+        # derive schedule/shocks from advanced format if needed
+        if not schedule and 'trigger_events' in config:
+            for idx, ev in enumerate(config.get('trigger_events', [])):
+                if isinstance(ev, str):
+                    schedule[ev] = {'mod': max(12, 18 + idx * 3), 'points': [6 + idx], 'severity': 0.6}
+        if not shocks and 'disturbances' in config:
+            dist = config.get('disturbances', {}) or {}
+            shocks = {k: v for k, v in dist.items() if isinstance(v, (int, float))}
         events: List[Any] = []
         for event_type, rule in schedule.items():
+            if not isinstance(rule, dict):
+                continue
             mod = int(rule.get('mod', 1))
             active = False
             if 'range' in rule:
@@ -35,44 +86,22 @@ class ScenarioEngine:
                 active = (step_id % mod) in set(rule['points'])
             if not active:
                 continue
-            events.append(event_factory(event_type, float(rule.get('severity', 0.5)), step_id, step_id, {}))
-            shock = shocks.get(event_type, {})
-            if 'corridor_flow_multiplier' in shock:
-                ctx.demand['corridor_flow_vph'] *= shock['corridor_flow_multiplier']
-            if 'ped_flow_multiplier' in shock:
-                ctx.demand['ped_flow_pph'] *= shock['ped_flow_multiplier']
-            if 'bike_flow_multiplier' in shock:
-                ctx.demand['bike_flow_pph'] *= shock['bike_flow_multiplier']
-            if 'headway_pressure_add' in shock:
-                ctx.bus_ops['headway_pressure'] = min(1.0, ctx.bus_ops['headway_pressure'] + shock['headway_pressure_add'])
-            if 'priority_requests_add' in shock:
-                ctx.bus_ops['priority_requests'] += int(shock['priority_requests_add'])
-            if 'delivery_pressure_add' in shock:
-                ctx.curb_ops['delivery_pressure'] = min(1.0, ctx.curb_ops['delivery_pressure'] + shock['delivery_pressure_add'])
-            if 'illegal_parking_pressure_add' in shock:
-                ctx.curb_ops['illegal_parking_pressure'] = min(1.0, ctx.curb_ops['illegal_parking_pressure'] + shock['illegal_parking_pressure_add'])
-            if 'pickup_dropoff_pressure_add' in shock:
-                ctx.curb_ops['pickup_dropoff_pressure'] = min(1.0, ctx.curb_ops['pickup_dropoff_pressure'] + shock['pickup_dropoff_pressure_add'])
-            if 'gateway_surge_add' in shock:
-                ctx.gateway_ops['surge_factor'] = min(1.0, ctx.gateway_ops['surge_factor'] + shock['gateway_surge_add'])
-
-            if 'metro_load_add' in shock:
-                ctx.rail_ops['metro_load'] = min(1.0, ctx.rail_ops['metro_load'] + shock['metro_load_add'])
-            if 'rodalies_load_add' in shock:
-                ctx.rail_ops['rodalies_load'] = min(1.0, ctx.rail_ops['rodalies_load'] + shock['rodalies_load_add'])
-            if 'fgc_load_add' in shock:
-                ctx.rail_ops['fgc_load'] = min(1.0, ctx.rail_ops['fgc_load'] + shock['fgc_load_add'])
-            if 'interchange_pressure_add' in shock:
-                ctx.rail_ops['interchange_pressure'] = min(1.0, ctx.rail_ops['interchange_pressure'] + shock['interchange_pressure_add'])
-            if 'airport_rail_pressure_add' in shock:
-                ctx.rail_ops['airport_rail_pressure'] = min(1.0, ctx.rail_ops['airport_rail_pressure'] + shock['airport_rail_pressure_add'])
-            if 'pedestrian_wave_add' in shock:
-                ctx.interchange_ops['pedestrian_wave'] = min(1.0, ctx.interchange_ops['pedestrian_wave'] + shock['pedestrian_wave_add'])
-            if 'crowd_management_readiness_add' in shock:
-                ctx.interchange_ops['crowd_management_readiness'] = min(1.0, ctx.interchange_ops['crowd_management_readiness'] + shock['crowd_management_readiness_add'])
-            if 'rain_intensity' in shock:
-                ctx.weather['rain_intensity'] = shock['rain_intensity']
-            if 'visibility' in shock:
-                ctx.weather['visibility'] = shock['visibility']
+            events.append(event_factory(event_type, float(rule.get('severity', 0.5)), step_id, step_id, rule))
+        # apply shocks multiplicatively to matching keys when present
+        for key, factor in shocks.items():
+            if not isinstance(factor, (int, float)):
+                continue
+            if key in getattr(ctx, 'demand', {}):
+                ctx.demand[key] *= float(factor)
+            elif key in getattr(ctx, 'bus_ops', {}):
+                ctx.bus_ops[key] *= float(factor)
+            elif key in getattr(ctx, 'curb_ops', {}):
+                ctx.curb_ops[key] *= float(factor)
+            elif key in getattr(ctx, 'gateway_ops', {}):
+                ctx.gateway_ops[key] *= float(factor)
+            elif key in getattr(ctx, 'rail_ops', {}):
+                ctx.rail_ops[key] *= float(factor)
+            elif key in getattr(ctx, 'interchange_ops', {}):
+                ctx.interchange_ops[key] *= float(factor)
         ctx.active_events = events
         return ctx
