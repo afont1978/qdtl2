@@ -52,13 +52,67 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-SCENARIO_LABELS = {
+DEFAULT_SCENARIO_LABELS = {
     "corridor_congestion": "Corridor congestion",
     "school_area_risk": "School-area safety risk",
     "urban_logistics_saturation": "Urban logistics saturation",
     "gateway_access_stress": "Gateway access stress",
     "event_mobility": "Event mobility",
 }
+
+
+def _load_scenario_library_file(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _extract_scenario_labels(obj: dict) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    if not isinstance(obj, dict):
+        return labels
+    if isinstance(obj.get("scenarios"), list):
+        for item in obj["scenarios"]:
+            if not isinstance(item, dict):
+                continue
+            sid = item.get("id")
+            title = item.get("title") or item.get("name")
+            if sid:
+                labels[str(sid)] = str(title or str(sid).replace("_", " ").title())
+    else:
+        # fallback for simple {id: {...}} or {id: title}
+        for sid, item in obj.items():
+            if sid in {"version", "description"}:
+                continue
+            if isinstance(item, dict):
+                title = item.get("title") or item.get("name")
+                labels[str(sid)] = str(title or str(sid).replace("_", " ").title())
+            else:
+                labels[str(sid)] = str(item or str(sid).replace("_", " ").title())
+    return labels
+
+
+def load_scenario_labels() -> dict[str, str]:
+    labels = dict(DEFAULT_SCENARIO_LABELS)
+    candidates = [
+        Path(__file__).with_name("scenario_library.json"),
+        Path(__file__).with_name("scenario_library_high_complexity_v2.json"),
+        Path(__file__).parent / "data" / "scenario_library.json",
+        Path(__file__).parent / "data" / "scenario_library_high_complexity_v2.json",
+        Path.cwd() / "scenario_library.json",
+        Path.cwd() / "scenario_library_high_complexity_v2.json",
+        Path.cwd() / "data" / "scenario_library.json",
+        Path.cwd() / "data" / "scenario_library_high_complexity_v2.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            labels.update(_extract_scenario_labels(_load_scenario_library_file(path)))
+    return labels
+
+
+SCENARIO_LABELS = load_scenario_labels()
+
 MODE_LABELS = {
     "traffic": "Traffic",
     "safety": "Safety",
@@ -101,6 +155,8 @@ DATA_PATH = resolve_hotspots_path()
 def init_state() -> None:
     ss = st.session_state
     ss.setdefault("scenario", "corridor_congestion")
+    if ss.get("scenario") not in SCENARIO_LABELS:
+        ss["scenario"] = next(iter(SCENARIO_LABELS.keys()))
     ss.setdefault("seed", 42)
     ss.setdefault("running", False)
     ss.setdefault("live_window", 36)
@@ -1084,7 +1140,7 @@ with st.sidebar:
             "Scenario",
             options=list(SCENARIO_LABELS.keys()),
             format_func=lambda x: SCENARIO_LABELS[x],
-            index=list(SCENARIO_LABELS.keys()).index(ss["scenario"]),
+            index=(list(SCENARIO_LABELS.keys()).index(ss["scenario"]) if ss.get("scenario") in SCENARIO_LABELS else 0),
         )
         seed_choice = st.number_input("Simulation seed", min_value=1, max_value=999999, value=int(ss["seed"]), step=1)
         submitted = st.form_submit_button("Apply scenario / seed", use_container_width=True)
@@ -1129,7 +1185,7 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.caption(f"Current scenario: {SCENARIO_LABELS[ss['scenario']]}")
+    st.caption(f"Current scenario: {SCENARIO_LABELS.get(ss['scenario'], ss['scenario'])}")
     st.caption(f"Seed: {ss['seed']}")
 
 st.markdown(
