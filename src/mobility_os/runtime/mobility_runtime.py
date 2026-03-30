@@ -13,7 +13,9 @@ from ..twins.traffic_twins import IntersectionTwin, RoadCorridorTwin
 from ..twins.transit_twins import BusCorridorTwin
 from ..twins.logistics_twins import CurbZoneTwin
 from ..twins.risk_twins import RiskHotspotTwin
+from ..twins.gateway_twins import GatewayClusterTwin
 from ..utils.io import Hotspot, load_hotspots_csv
+from .state_aggregator import aggregate_city_state, propagate_twin_dependencies
 from ..decision.situation_interpreter import SituationInterpreter
 from ..decision.problem_decomposer import ProblemDecomposer
 from ..decision.priority_arbiter import PriorityArbiter
@@ -411,6 +413,7 @@ class MobilityRuntime:
             "bus_corridor": BusCorridorTwin("bus_corridor", "bus_corridor", "Bus Corridor", ts),
             "curb_zone": CurbZoneTwin("curb_zone", "curb_zone", "Curb Zone", ts),
             "risk_hotspot": RiskHotspotTwin("risk_hotspot", "risk_hotspot", "Risk Hotspot", ts),
+            "gateway_cluster": GatewayClusterTwin("gateway_cluster", "gateway_cluster", "Gateway Cluster", ts),
             "city_mobility_system": CityMobilitySystemTwin("city_mobility_system", "city_mobility_system", "City Mobility System", ts),
         }
         self._attach_hotspots_to_twins()
@@ -816,6 +819,22 @@ class MobilityRuntime:
             pedestrian_exposure=state["pedestrian_exposure"],
             bike_conflict_index=state["bike_conflict_index"],
             gateway_delay_index=state["gateway_delay_index"],
+            city_pressure_score=state.get("city_pressure_score", 0.0),
+            intersection_operational_status=state.get("intersection_operational_status", ""),
+            road_corridor_operational_status=state.get("road_corridor_operational_status", ""),
+            bus_corridor_operational_status=state.get("bus_corridor_operational_status", ""),
+            curb_zone_operational_status=state.get("curb_zone_operational_status", ""),
+            risk_hotspot_operational_status=state.get("risk_hotspot_operational_status", ""),
+            intersection_pressure_level=state.get("intersection_pressure_level", ""),
+            road_corridor_pressure_level=state.get("road_corridor_pressure_level", ""),
+            bus_corridor_pressure_level=state.get("bus_corridor_pressure_level", ""),
+            curb_zone_pressure_level=state.get("curb_zone_pressure_level", ""),
+            risk_hotspot_pressure_level=state.get("risk_hotspot_pressure_level", ""),
+            intersection_trend_state=state.get("intersection_trend_state", ""),
+            road_corridor_trend_state=state.get("road_corridor_trend_state", ""),
+            bus_corridor_trend_state=state.get("bus_corridor_trend_state", ""),
+            curb_zone_trend_state=state.get("curb_zone_trend_state", ""),
+            risk_hotspot_trend_state=state.get("risk_hotspot_trend_state", ""),
             step_operational_score=step_operational_score,
             cumulative_operational_score=self.cumulative_operational_score,
             decision_route=decision["route"],
