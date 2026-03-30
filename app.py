@@ -1035,26 +1035,14 @@ hotspots_df = load_hotspots()
 
 with st.sidebar:
     st.markdown("## Control panel")
-
-    available_scenarios = list(SCENARIO_LABELS.keys()) if isinstance(SCENARIO_LABELS, dict) and SCENARIO_LABELS else list(BASE_SCENARIO_LABELS.keys())
-    current_scenario = ss.get("scenario", available_scenarios[0] if available_scenarios else "corridor_congestion")
-    if current_scenario not in available_scenarios:
-        current_scenario = available_scenarios[0] if available_scenarios else "corridor_congestion"
-
-    current_seed = ss.get("seed", 42)
-    try:
-        current_seed = int(current_seed)
-    except Exception:
-        current_seed = 42
-
     with st.form("scenario_form"):
         scenario_choice = st.selectbox(
             "Scenario",
-            options=available_scenarios,
-            format_func=lambda x: SCENARIO_LABELS.get(x, x.replace("_", " ").title()),
-            index=available_scenarios.index(current_scenario) if available_scenarios else 0,
+            options=list(SCENARIO_LABELS.keys()),
+            format_func=lambda x: SCENARIO_LABELS[x],
+            index=list(SCENARIO_LABELS.keys()).index(ss["scenario"]),
         )
-        seed_choice = st.number_input("Simulation seed", min_value=1, max_value=999999, value=current_seed, step=1)
+        seed_choice = st.number_input("Simulation seed", min_value=1, max_value=999999, value=int(ss["seed"]), step=1)
         submitted = st.form_submit_button("Apply scenario / seed", use_container_width=True)
         if submitted:
             ss["scenario"] = scenario_choice
