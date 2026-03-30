@@ -600,7 +600,51 @@ def recommend_action_from_record(row: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def build_hotspot_signals(hotspots_df: pd.DataFrame, latest: Dict[str, Any], focused_name: str | None) -> pd.DataFrame:
+
+def _signal_value_from_metrics(layer: str, metrics: Dict[str, float]) -> tuple[float, str, str, str]:
+    if layer == "Intermodal / public transport":
+        relevant_value = max(metrics["bus_bunching_index"], 1.0 - min(metrics["corridor_reliability_index"], 1.0))
+        return (
+            relevant_value,
+            "Transit and corridor stress",
+            "BUS",
+            f"Bus bunching {metrics['bus_bunching_index']:.2f}; corridor reliability {metrics['corridor_reliability_index']:.2f}.",
+        )
+    if layer == "Logistics / curb / port":
+        relevant_value = max(
+            0.55 * metrics["curb_occupancy_rate"] + 0.45 * metrics["illegal_curb_occupancy_rate"],
+            min(metrics["delivery_queue"] / 15.0, 1.0),
+            metrics["gateway_delay_index"] * 0.9,
+        )
+        return (
+            relevant_value,
+            "Logistics and curbside pressure",
+            "LOG",
+            f"Curb occupancy {metrics['curb_occupancy_rate']:.2f}; illegal use {metrics['illegal_curb_occupancy_rate']:.2f}; queue {metrics['delivery_queue']:.1f}.",
+        )
+    if layer == "Airport / gateway":
+        relevant_value = max(metrics["gateway_delay_index"], 0.7 * (1.0 - min(metrics["network_speed_index"], 1.0)))
+        return (
+            relevant_value,
+            "Gateway access pressure",
+            "GTW",
+            f"Gateway delay {metrics['gateway_delay_index']:.2f}; network speed {metrics['network_speed_index']:.2f}.",
+        )
+    relevant_value = max(metrics["risk_score"], metrics["near_miss_index"], 0.9 * metrics["pedestrian_exposure"])
+    return (
+        relevant_value,
+        "Urban safety and pedestrian pressure",
+        "RSK",
+        f"Risk {metrics['risk_score']:.2f}; near-miss {metrics['near_miss_index']:.2f}; pedestrian exposure {metrics['pedestrian_exposure']:.2f}.",
+    )
+
+
+def build_hotspot_signals(hotspots_df: pd.DataFrame, history_df: pd.DataFrame, latest: Dict[str, Any], focused_name: str | None) -> pd.DataFrame:
+    """
+    Build a dynamic signal layer where alerts appear, intensify, clear and disappear
+    as the scenario evolves. The map only shows hotspots that are operationally
+    relevant right now (or are clearing after having been relevant very recently).
+    """
     if hotspots_df.empty:
         return pd.DataFrame()
 
@@ -609,7 +653,7 @@ def build_hotspot_signals(hotspots_df: pd.DataFrame, latest: Dict[str, Any], foc
     active_event = (latest or {}).get("active_event") or "none"
     scenario = (latest or {}).get("scenario") or "unknown"
 
-    base_metrics = {
+    latest_metrics = {
         "network_speed_index": float((latest or {}).get("network_speed_index", 0.0) or 0.0),
         "corridor_reliability_index": float((latest or {}).get("corridor_reliability_index", 0.0) or 0.0),
         "bus_bunching_index": float((latest or {}).get("bus_bunching_index", 0.0) or 0.0),
@@ -623,6 +667,16 @@ def build_hotspot_signals(hotspots_df: pd.DataFrame, latest: Dict[str, Any], foc
         "gateway_delay_index": float((latest or {}).get("gateway_delay_index", 0.0) or 0.0),
     }
 
+    previous_metrics = latest_metrics.copy()
+    if history_df is not None and not history_df.empty:
+        hist = history_df.tail(8).copy()
+        if len(hist) >= 2:
+            prev = hist.iloc[:-1].tail(4)
+            if not prev.empty:
+                for k in previous_metrics.keys():
+                    if k in prev.columns:
+                        previous_metrics[k] = float(prev[k].mean())
+
     def classify(level: float) -> str:
         if level >= 0.78:
             return "Critical"
@@ -632,13 +686,27 @@ def build_hotspot_signals(hotspots_df: pd.DataFrame, latest: Dict[str, Any], foc
             return "Watch"
         return "Normal"
 
-    def color(level_name: str) -> list[int]:
-        return {
-            "Normal": [70, 160, 80, 180],
+    def color(level_name: str, phase: str) -> list[int]:
+        base = {
+            "Normal": [70, 160, 80, 170],
             "Watch": [245, 190, 50, 190],
             "Alert": [245, 120, 35, 210],
             "Critical": [215, 50, 50, 230],
         }[level_name]
+        if phase == "Emerging":
+            return [min(255, base[0] + 12), min(255, base[1] + 12), min(255, base[2] + 12), 235]
+        if phase == "Clearing":
+            return [base[0], base[1], base[2], 120]
+        return base
+
+    def event_relevance(layer: str, event: str) -> bool:
+        mapping = {
+            "Intermodal / public transport": {"bus_bunching", "demand_spike", "event_release", "incident"},
+            "Logistics / curb / port": {"delivery_wave", "illegal_curb_occupation", "gateway_surge", "incident"},
+            "Airport / gateway": {"gateway_surge", "incident", "event_release"},
+            "Urban core / tourism": {"school_peak", "rain_event", "incident", "event_release"},
+        }
+        return event in mapping.get(layer, set())
 
     for _, row in hotspots_df.iterrows():
         name = row["name"]
@@ -647,47 +715,47 @@ def build_hotspot_signals(hotspots_df: pd.DataFrame, latest: Dict[str, Any], foc
         is_primary = name == primary
         is_focused = name == focused_name
 
-        emphasis = 1.0
-        if is_primary:
-            emphasis += 0.22
-        if is_focused:
-            emphasis += 0.12
-
-        signal_type = "General urban pressure"
-        short_label = "OBS"
-        relevant_value = 0.0
-        message = "Nominal operating conditions."
-
-        if layer == "Intermodal / public transport":
-            relevant_value = max(base_metrics["bus_bunching_index"], 1.0 - min(base_metrics["corridor_reliability_index"], 1.0))
-            signal_type = "Transit and corridor stress"
-            short_label = "BUS"
-            message = f"Bus bunching {base_metrics['bus_bunching_index']:.2f}; corridor reliability {base_metrics['corridor_reliability_index']:.2f}."
-        elif layer == "Logistics / curb / port":
-            relevant_value = max(
-                0.55 * base_metrics["curb_occupancy_rate"] + 0.45 * base_metrics["illegal_curb_occupancy_rate"],
-                min(base_metrics["delivery_queue"] / 15.0, 1.0),
-                base_metrics["gateway_delay_index"] * 0.9,
-            )
-            signal_type = "Logistics and curbside pressure"
-            short_label = "LOG"
-            message = f"Curb occupancy {base_metrics['curb_occupancy_rate']:.2f}; illegal use {base_metrics['illegal_curb_occupancy_rate']:.2f}; queue {base_metrics['delivery_queue']:.1f}."
-        elif layer == "Airport / gateway":
-            relevant_value = max(base_metrics["gateway_delay_index"], 0.7 * (1.0 - min(base_metrics["network_speed_index"], 1.0)))
-            signal_type = "Gateway access pressure"
-            short_label = "GTW"
-            message = f"Gateway delay {base_metrics['gateway_delay_index']:.2f}; network speed {base_metrics['network_speed_index']:.2f}."
-        else:
-            relevant_value = max(base_metrics["risk_score"], base_metrics["near_miss_index"], 0.9 * base_metrics["pedestrian_exposure"])
-            signal_type = "Urban safety and pedestrian pressure"
-            short_label = "RSK"
-            message = f"Risk {base_metrics['risk_score']:.2f}; near-miss {base_metrics['near_miss_index']:.2f}; pedestrian exposure {base_metrics['pedestrian_exposure']:.2f}."
+        emphasis = 1.0 + (0.22 if is_primary else 0.0) + (0.12 if is_focused else 0.0)
+        cur_value, signal_type, short_label, cur_message = _signal_value_from_metrics(layer, latest_metrics)
+        prev_value, _, _, _ = _signal_value_from_metrics(layer, previous_metrics)
 
         if active_event in {"incident", "event_release", "gateway_surge", "delivery_wave", "school_peak", "rain_event", "bus_bunching"}:
-            relevant_value += 0.08 if is_primary or is_focused else 0.03
+            cur_value += 0.08 if is_primary or is_focused else 0.03
+            prev_value += 0.03 if event_relevance(layer, active_event) else 0.0
 
-        severity = max(0.0, min(1.0, relevant_value * emphasis))
+        severity = max(0.0, min(1.0, cur_value * emphasis))
+        prev_severity = max(0.0, min(1.0, prev_value * emphasis))
         level = classify(severity)
+        relevant_event = event_relevance(layer, active_event)
+
+        if severity >= 0.38 and prev_severity < 0.38:
+            phase = "Emerging"
+        elif severity >= 0.38:
+            phase = "Active"
+        elif prev_severity >= 0.38 and severity >= 0.18:
+            phase = "Clearing"
+        elif relevant_event and severity >= 0.24:
+            phase = "Emerging"
+        else:
+            phase = "Hidden"
+
+        visible = (
+            is_primary
+            or is_focused
+            or phase in {"Emerging", "Active", "Clearing"}
+            or (relevant_event and severity >= 0.24)
+        )
+
+        if not visible:
+            continue
+
+        if phase == "Clearing":
+            message = f"Signal is easing. {cur_message}"
+        elif phase == "Emerging":
+            message = f"Signal is building. {cur_message}"
+        else:
+            message = cur_message
+
         records.append({
             "name": name,
             "lat": float(row["lat"]),
@@ -700,15 +768,23 @@ def build_hotspot_signals(hotspots_df: pd.DataFrame, latest: Dict[str, Any], foc
             "signal_type": signal_type,
             "short_label": short_label,
             "severity": severity,
+            "previous_severity": prev_severity,
+            "delta_severity": severity - prev_severity,
             "alert_level": level,
-            "color": color(level),
-            "radius": 160 + 220 * severity + (90 if is_primary else 0) + (60 if is_focused else 0),
+            "phase": phase,
+            "color": color(level, phase),
+            "radius": 150 + 240 * severity + (80 if is_primary else 0) + (45 if is_focused else 0),
             "active_event": active_event,
             "message": message,
             "scenario": scenario,
+            "visible": visible,
         })
-    return pd.DataFrame(records)
 
+    out = pd.DataFrame(records)
+    if out.empty:
+        return out
+    # show strongest first and limit labels later in render
+    return out.sort_values(["severity", "is_primary", "is_focused"], ascending=[False, False, False]).reset_index(drop=True)
 
 def make_alert_level_chart(signals_df: pd.DataFrame) -> go.Figure:
     if signals_df.empty:
@@ -779,7 +855,7 @@ def render_signals_map(signals_df: pd.DataFrame, height: int = 720) -> None:
         initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11.9, pitch=0),
         layers=layers,
         tooltip={
-            "html": "<b>{name}</b><br/><b>{alert_level}</b> · {signal_type}<br/>{message}<br/><b>Event:</b> {active_event}<br/><b>Layer:</b> {layer_group}<br/>{streets}",
+            "html": "<b>{name}</b><br/><b>{alert_level}</b> · {phase} · {signal_type}<br/>{message}<br/><b>Event:</b> {active_event}<br/><b>Layer:</b> {layer_group}<br/>{streets}",
         },
     )
     try:
@@ -998,7 +1074,7 @@ with tab_signals:
     if df.empty:
         st.info("No simulation data yet.")
     else:
-        signals_df = build_hotspot_signals(hotspots_df, latest, focus_name)
+        signals_df = build_hotspot_signals(hotspots_df, df, latest, focus_name)
         if signals_df.empty:
             st.info("No signal layer available.")
         else:
@@ -1016,7 +1092,7 @@ with tab_signals:
                 ], "Operational context")
                 st.plotly_chart(make_alert_level_chart(signals_df), use_container_width=True)
                 st.dataframe(
-                    top_alerts[["name", "alert_level", "signal_type", "active_event", "severity"]],
+                    top_alerts[["name", "alert_level", "phase", "signal_type", "active_event", "severity"]],
                     use_container_width=True,
                     hide_index=True,
                     height=260,
