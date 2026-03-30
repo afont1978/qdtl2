@@ -10,6 +10,10 @@ from ..twins.transit_twins import BusCorridorTwin
 from ..twins.logistics_twins import CurbZoneTwin
 from ..twins.risk_twins import RiskHotspotTwin
 from ..twins.gateway_twins import GatewayClusterTwin
+from ..risk.risk_models import compute_risk_components, compute_risk_burden, dominant_risk_type
+from ..risk.risk_state_machine import determine_risk_phase
+from ..risk.risk_forecast import forecast_risk_short
+from ..risk.prevention_policy import recommend_prevention
 
 
 def propagate_twin_dependencies(twins: Dict[str, Any], ctx: Any) -> None:
@@ -69,12 +73,31 @@ def aggregate_city_state(runtime: Any, ctx: Any) -> Dict[str, Any]:
     primary_name = hotspot_map["road_corridor"]
     primary_hotspot = runtime._hotspot(primary_name)
 
+    risk_components = compute_risk_components({
+        "pedestrian_exposure": risk.pedestrian_exposure,
+        "bike_conflict_index": risk.bike_conflict_index,
+        "risk_score": risk.risk_score,
+        "bus_bunching_index": bus.bunching_index,
+        "network_speed_index": network_speed_index,
+        "curb_pressure_index": curb_pressure_index,
+        "illegal_curb_occupancy_rate": curb.illegal_occupancy_rate,
+        "gateway_delay_index": gateway_delay_index,
+        "rain_flag": ctx.weather["rain_intensity"] > 0.20,
+    })
+    risk_burden = compute_risk_burden(risk_components)
+    risk_phase = determine_risk_phase(risk.risk_score, risk.prev_risk_score, incident=active_event == "incident")
+    forecast = forecast_risk_short(risk.risk_score, risk.prev_risk_score, risk_phase)
+    prevention = recommend_prevention({
+        "primary_hotspot_name": primary_name,
+    }, risk_components, risk_phase)
+
     city_pressure_score = float(np.clip(
-        0.24 * (1.0 - network_speed_index)
-        + 0.18 * bus.bunching_index
-        + 0.18 * curb_pressure_index
-        + 0.22 * risk.risk_score
-        + 0.18 * gateway_delay_index,
+        0.20 * (1.0 - network_speed_index)
+        + 0.15 * bus.bunching_index
+        + 0.15 * curb_pressure_index
+        + 0.20 * risk.risk_score
+        + 0.15 * gateway_delay_index
+        + 0.15 * risk_burden,
         0.0,
         1.0,
     ))
@@ -107,6 +130,22 @@ def aggregate_city_state(runtime: Any, ctx: Any) -> Dict[str, Any]:
         "near_miss_index": risk.near_miss_index,
         "pedestrian_exposure": risk.pedestrian_exposure,
         "bike_conflict_index": risk.bike_conflict_index,
+        "pedestrian_risk": risk_components["pedestrian_risk"],
+        "bike_risk": risk_components["bike_risk"],
+        "motorcycle_risk": risk_components["motorcycle_risk"],
+        "bus_conflict_risk": risk_components["bus_conflict_risk"],
+        "logistics_conflict_risk": risk_components["logistics_conflict_risk"],
+        "gateway_risk": risk_components["gateway_risk"],
+        "weather_risk": risk_components["weather_risk"],
+        "risk_burden": risk_burden,
+        "dominant_risk_type": dominant_risk_type(risk_components),
+        "risk_phase": risk_phase,
+        "risk_forecast_score": forecast["risk_forecast_score"],
+        "escalation_probability": forecast["escalation_probability"],
+        "risk_forecast_trend": forecast["risk_forecast_trend"],
+        "preventive_action_recommended": prevention["preventive_action_recommended"],
+        "preventive_priority": prevention["preventive_priority"],
+        "preventive_layer": prevention["preventive_layer"],
         "gateway_delay_index": gateway_delay_index,
         "coordination_flag": coordination_flag,
         "logistics_pressure_flag": logistics_pressure_flag,

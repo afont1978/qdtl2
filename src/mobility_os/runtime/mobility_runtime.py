@@ -145,6 +145,8 @@ class MobilityExecRecord:
     fallback_triggered: bool
     fallback_reasons: List[str]
     route_reason: str
+    complexity_score: float = 0.0
+    discrete_ratio: float = 0.0
     situation_type: str = ""
     dominant_objective: str = ""
     subproblem_type: str = ""
@@ -154,8 +156,38 @@ class MobilityExecRecord:
     expected_impact: str = ""
     validation_status: str = ""
     expected_value_of_hybrid: float = 0.0
-    complexity_score: float
-    discrete_ratio: float
+    pedestrian_risk: float = 0.0
+    bike_risk: float = 0.0
+    motorcycle_risk: float = 0.0
+    bus_conflict_risk: float = 0.0
+    logistics_conflict_risk: float = 0.0
+    gateway_risk: float = 0.0
+    weather_risk: float = 0.0
+    risk_burden: float = 0.0
+    dominant_risk_type: str = ""
+    risk_phase: str = "latent"
+    risk_forecast_score: float = 0.0
+    escalation_probability: float = 0.0
+    risk_forecast_trend: str = "stable"
+    preventive_action_recommended: str = ""
+    preventive_priority: str = ""
+    preventive_layer: str = ""
+    city_pressure_score: float = 0.0
+    intersection_operational_status: str = ""
+    road_corridor_operational_status: str = ""
+    bus_corridor_operational_status: str = ""
+    curb_zone_operational_status: str = ""
+    risk_hotspot_operational_status: str = ""
+    intersection_pressure_level: str = ""
+    road_corridor_pressure_level: str = ""
+    bus_corridor_pressure_level: str = ""
+    curb_zone_pressure_level: str = ""
+    risk_hotspot_pressure_level: str = ""
+    intersection_trend_state: str = ""
+    road_corridor_trend_state: str = ""
+    bus_corridor_trend_state: str = ""
+    curb_zone_trend_state: str = ""
+    risk_hotspot_trend_state: str = ""
     intersection_hotspot: str = ""
     road_corridor_hotspot: str = ""
     bus_corridor_hotspot: str = ""
@@ -400,6 +432,12 @@ class MobilityRuntime:
         self.step_id = 0
         self.cumulative_operational_score = 0.0
         self.orchestrator = MobilityHybridOrchestrator(seed=self.seed)
+        self.situation_interpreter = SituationInterpreter()
+        self.problem_decomposer = ProblemDecomposer()
+        self.priority_arbiter = PriorityArbiter()
+        self.intervention_planner = InterventionPlanner()
+        self.validator = Validator()
+        self.decision_memory = DecisionMemory(maxlen=32)
         self.records: List[MobilityExecRecord] = []
         self.hotspots: Dict[str, Hotspot] = load_hotspots_csv(hotspots_csv)
         self.twins: Dict[str, TwinBase] = {}
@@ -627,72 +665,17 @@ class MobilityRuntime:
         }
         for twin in self.twins.values():
             twin.ts = utc_now_iso()
-        self.twins["intersection"].step(dt_h, ctx_dict)
         self.twins["road_corridor"].step(dt_h, ctx_dict)
+        self.twins["intersection"].step(dt_h, ctx_dict)
         self.twins["bus_corridor"].step(dt_h, ctx_dict)
         self.twins["curb_zone"].step(dt_h, ctx_dict)
+        self.twins["gateway_cluster"].step(dt_h, ctx_dict)
+        propagate_twin_dependencies(self.twins, ctx)
         self.twins["risk_hotspot"].step(dt_h, ctx_dict)
 
     def aggregate_state(self, ctx: ScenarioContext) -> Dict[str, Any]:
-        inter = self.twins["intersection"]
-        corridor = self.twins["road_corridor"]
-        bus = self.twins["bus_corridor"]
-        curb = self.twins["curb_zone"]
-        risk = self.twins["risk_hotspot"]
-        assert isinstance(inter, IntersectionTwin)
-        assert isinstance(corridor, RoadCorridorTwin)
-        assert isinstance(bus, BusCorridorTwin)
-        assert isinstance(curb, CurbZoneTwin)
-        assert isinstance(risk, RiskHotspotTwin)
-        active_event = ctx.active_events[0].event_type if ctx.active_events else None
-        network_speed_index = float(np.clip(corridor.avg_speed_kmh / 32.0, 0.0, 1.2))
-        corridor_reliability_index = float(np.clip(1.0 / corridor.travel_time_index, 0.0, 1.2))
-        curb_pressure_index = float(np.clip(0.55 * curb.occupancy_rate + 0.45 * curb.illegal_occupancy_rate, 0.0, 1.0))
-        gateway_delay_index = float(np.clip(0.18 + 0.65 * ctx.gateway_ops["surge_factor"] + 0.12 * corridor.queue_spillback_risk, 0.0, 1.0))
-        coordination_flag = bus.bunching_index > 0.28 and corridor.queue_spillback_risk > 0.35
-        logistics_pressure_flag = curb.delivery_queue > 8.0 or curb.illegal_occupancy_rate > 0.22
-        hotspot_map = self._scenario_hotspot_names()
-        primary_name = hotspot_map["road_corridor"]
-        primary_hotspot = self._hotspot(primary_name)
-        return {
-            "ts": utc_now_iso(),
-            "mode": ctx.mode,
-            "scenario": ctx.scenario,
-            "scenario_note": self._scenario_note(),
-            "active_event": active_event,
-            "intersection_hotspot": hotspot_map["intersection"],
-            "road_corridor_hotspot": hotspot_map["road_corridor"],
-            "bus_corridor_hotspot": hotspot_map["bus_corridor"],
-            "curb_zone_hotspot": hotspot_map["curb_zone"],
-            "risk_hotspot_name": hotspot_map["risk_hotspot"],
-            "primary_hotspot_name": primary_name,
-            "primary_hotspot_lat": primary_hotspot.lat if primary_hotspot else 41.3851,
-            "primary_hotspot_lon": primary_hotspot.lon if primary_hotspot else 2.1734,
-            "network_speed_index": network_speed_index,
-            "corridor_reliability_index": corridor_reliability_index,
-            "corridor_delay_s": corridor.travel_time_index * 75.0,
-            "bus_bunching_index": bus.bunching_index,
-            "bus_commercial_speed_kmh": bus.commercial_speed_kmh,
-            "bus_priority_requests": bus.priority_requests_active,
-            "curb_occupancy_rate": curb.occupancy_rate,
-            "illegal_curb_occupancy_rate": curb.illegal_occupancy_rate,
-            "delivery_queue": curb.delivery_queue,
-            "curb_pressure_index": curb_pressure_index,
-            "risk_score": risk.risk_score,
-            "near_miss_index": risk.near_miss_index,
-            "pedestrian_exposure": risk.pedestrian_exposure,
-            "bike_conflict_index": risk.bike_conflict_index,
-            "gateway_delay_index": gateway_delay_index,
-            "coordination_flag": coordination_flag,
-            "logistics_pressure_flag": logistics_pressure_flag,
-            "rain_flag": ctx.weather["rain_intensity"] > 0.20,
-            "school_peak_flag": active_event == "school_peak",
-            "incident_flag": active_event == "incident",
-            "delivery_wave_flag": active_event == "delivery_wave",
-            "gateway_surge_flag": active_event == "gateway_surge",
-        }
+        return aggregate_city_state(self, ctx)
 
-    
     def build_problem(self, state: Dict[str, Any], ctx: ScenarioContext) -> MobilityDispatchProblem:
         discrete_vars = 8
         continuous_vars = 2
@@ -753,6 +736,9 @@ class MobilityRuntime:
             "risk_hotspot_name": state["risk_hotspot_name"],
             "subproblems": [sp.subproblem_type for sp in subproblems],
             "situation_notes": situation.notes,
+            "risk_phase": state.get("risk_phase", "latent"),
+            "dominant_risk_type": state.get("dominant_risk_type", ""),
+            "risk_burden": state.get("risk_burden", 0.0),
         }
         return MobilityDispatchProblem(
             step_id=self.step_id,
@@ -819,6 +805,22 @@ class MobilityRuntime:
             pedestrian_exposure=state["pedestrian_exposure"],
             bike_conflict_index=state["bike_conflict_index"],
             gateway_delay_index=state["gateway_delay_index"],
+            pedestrian_risk=state.get("pedestrian_risk", 0.0),
+            bike_risk=state.get("bike_risk", 0.0),
+            motorcycle_risk=state.get("motorcycle_risk", 0.0),
+            bus_conflict_risk=state.get("bus_conflict_risk", 0.0),
+            logistics_conflict_risk=state.get("logistics_conflict_risk", 0.0),
+            gateway_risk=state.get("gateway_risk", 0.0),
+            weather_risk=state.get("weather_risk", 0.0),
+            risk_burden=state.get("risk_burden", 0.0),
+            dominant_risk_type=state.get("dominant_risk_type", ""),
+            risk_phase=state.get("risk_phase", "latent"),
+            risk_forecast_score=state.get("risk_forecast_score", 0.0),
+            escalation_probability=state.get("escalation_probability", 0.0),
+            risk_forecast_trend=state.get("risk_forecast_trend", "stable"),
+            preventive_action_recommended=state.get("preventive_action_recommended", ""),
+            preventive_priority=state.get("preventive_priority", ""),
+            preventive_layer=state.get("preventive_layer", ""),
             city_pressure_score=state.get("city_pressure_score", 0.0),
             intersection_operational_status=state.get("intersection_operational_status", ""),
             road_corridor_operational_status=state.get("road_corridor_operational_status", ""),
