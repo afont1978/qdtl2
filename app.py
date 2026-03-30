@@ -1308,9 +1308,6 @@ st.markdown(
 
 run_every = f"{ss['live_interval_s']}s" if ss.get("running", False) else None
 
-@st.fragment(run_every=run_every)
-
-
 
 def scenario_spec_for(scenario_id: str | None) -> dict[str, Any]:
     if not scenario_id:
@@ -1413,15 +1410,40 @@ def render_scenario_story_map(hotspots_df: pd.DataFrame, latest: Dict[str, Any],
         st.dataframe(plot_df[["name", "role", "category", "streets", "lat", "lon"]], use_container_width=True, hide_index=True)
 
 
-def make_story_event_track(spec: dict, active_event: str | None) -> go.Figure:
+def make_story_event_track(spec: dict, active_event: str | None, step_id: int | None = None) -> go.Figure:
     events = spec.get("trigger_events", []) or []
     if isinstance(events, str):
         events = [events]
     if not events:
         return go.Figure()
+
     plot_df = pd.DataFrame({"Order": list(range(1, len(events)+1)), "Event": events})
-    plot_df["State"] = plot_df["Event"].apply(lambda x: "Active" if x == active_event else "Scenario")
-    fig = px.scatter(plot_df, x="Order", y=[1]*len(plot_df), color="State", text="Event", template="plotly_dark", title="Scenario event sequence", color_discrete_map={"Scenario":"#5A78C9","Active":"#F29F05"})
+    current_idx = 0
+    if step_id is not None and len(events) > 0:
+        try:
+            current_idx = int(step_id - 1) % len(events)
+        except Exception:
+            current_idx = 0
+
+    def classify_event(row):
+        if active_event and row["Event"] == active_event:
+            return "Active"
+        if row.name == current_idx:
+            return "Current"
+        return "Scenario"
+
+    plot_df["State"] = plot_df.apply(classify_event, axis=1)
+    color_map = {"Scenario": "#5A78C9", "Current": "#9C6ADE", "Active": "#F29F05"}
+    fig = px.scatter(
+        plot_df,
+        x="Order",
+        y=[1] * len(plot_df),
+        color="State",
+        text="Event",
+        template="plotly_dark",
+        title="Scenario event sequence",
+        color_discrete_map=color_map,
+    )
     fig.update_traces(textposition="top center", marker=dict(size=18))
     fig.update_yaxes(visible=False, showticklabels=False)
     fig.update_xaxes(title="Event order")
@@ -1490,11 +1512,11 @@ def render_scenario_storyboard(latest: Dict[str, Any], hotspots_df: pd.DataFrame
 
     charts = st.columns(3)
     with charts[0]:
-        st.plotly_chart(make_story_event_track(spec, latest.get("active_event")), use_container_width=True, key=f"story_events_{scenario_id}")
+        st.plotly_chart(make_story_event_track(spec, latest.get("active_event"), int(latest.get("step_id", 0) or 0)), use_container_width=True, key=f"story_events_{scenario_id}_{int(latest.get('step_id', 0) or 0)}")
     with charts[1]:
-        st.plotly_chart(make_story_disturbance_chart(spec), use_container_width=True, key=f"story_dist_{scenario_id}")
+        st.plotly_chart(make_story_disturbance_chart(spec), use_container_width=True, key=f"story_dist_{scenario_id}_{int(latest.get('step_id', 0) or 0)}")
     with charts[2]:
-        st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True, key=f"story_subsystems_{scenario_id}")
+        st.plotly_chart(make_subsystem_score_chart(latest), use_container_width=True, key=f"story_subsystems_{scenario_id}_{int(latest.get('step_id', 0) or 0)}")
 
     cols = st.columns(3)
     with cols[0]:
@@ -1517,6 +1539,7 @@ def render_scenario_storyboard(latest: Dict[str, Any], hotspots_df: pd.DataFrame
         render_summary_table([(metric_label(str(k)), latest.get(str(k), "—")) for k in kpis[:6]], "Scenario KPI watchlist")
 
 
+@st.fragment(run_every=run_every)
 def live_monitor_fragment():
     if st.session_state.get("running", False):
         st.session_state["rt"].step()
@@ -1591,6 +1614,18 @@ def live_monitor_fragment():
         st.markdown("</div>", unsafe_allow_html=True)
 
 live_monitor_fragment()
+
+
+@st.fragment(run_every=run_every)
+def scenario_storyboard_fragment():
+    df_local = get_df()
+    latest_local = latest_record(df_local)
+    focus_local = selected_hotspot_name(latest_local)
+    if df_local.empty:
+        st.info("No simulation data yet.")
+        return
+    hotspots_live = load_hotspots()
+    render_scenario_storyboard(latest_local, hotspots_live, focus_local)
 
 df = get_df()
 latest = latest_record(df)
@@ -1762,10 +1797,7 @@ with tab_risk:
 
 
 with tab_story:
-    if df.empty:
-        st.info("No simulation data yet.")
-    else:
-        render_scenario_storyboard(latest, hotspots_df, focus_name)
+    scenario_storyboard_fragment()
 
 with tab_sim:
     st.markdown("## What-if & Simulation")
