@@ -1,19 +1,14 @@
-# Barcelona Mobility Control Room v3
+# Hybrid Quantum-Classical Urban Mobility Control Room
 
-Version 3 of the Barcelona mobility prototype with:
-- central layered map
-- hotspot focus selector
-- real Barcelona hotspots from CSV
-- stable scenario switching via form
-- clearer navigation between overview, twins, risk and audit
+MVP de control room para movilidad urbana multimodal orientado a Barcelona.
 
-## Run locally
+## Incluye
+- `mobility_runtime.py`: motor de simulación del MVP
+- `app.py`: dashboard Streamlit
+- `requirements.txt`: dependencias mínimas
 
+## Ejecución local
 ```bash
 python -m pip install -r requirements.txt
-streamlit run app.py
+python -m streamlit run app.py
 ```
-
-
-## v5 stable live architecture
-This version uses a single Streamlit fragment as a dedicated Live Monitor. The rest of the tabs are static snapshots to reduce flicker.
