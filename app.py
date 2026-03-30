@@ -458,6 +458,94 @@ def metric_delta_rows(before: Dict[str, Any], after: Dict[str, Any], keys: list[
     return pd.DataFrame(rows)
 
 
+def recommend_action_from_record(row: Dict[str, Any]) -> Dict[str, str]:
+    event = str(row.get("active_event") or "none")
+    hotspot_name = str(row.get("primary_hotspot_name") or "")
+    route = str(row.get("decision_route") or "CLASSICAL")
+    risk = float(row.get("risk_score", 0.0) or 0.0)
+    bunching = float(row.get("bus_bunching_index", 0.0) or 0.0)
+    curb_occ = float(row.get("curb_occupancy_rate", 0.0) or 0.0)
+    illegal_curb = float(row.get("illegal_curb_occupancy_rate", 0.0) or 0.0)
+    gateway_delay = float(row.get("gateway_delay_index", 0.0) or 0.0)
+    network_speed = float(row.get("network_speed_index", 0.0) or 0.0)
+
+    hotspot_lower = hotspot_name.lower()
+    asset_focus = "gateway" if any(k in hotspot_lower for k in ["aeropuerto", "port", "moll", "terminal", "plaça cerdà", "zona franca"]) else (
+        "intermodal" if any(k in hotspot_lower for k in ["glòries", "espanya", "catalunya", "sants"]) else "urban_node"
+    )
+
+    action = "Maintain current operational package"
+    priority = "Medium"
+    owner = "Urban operations"
+    expected = "Preserve the current balance between flow, safety and curbside performance."
+    subproblem = "local_control_problem"
+
+    if event == "incident":
+        action = "Deploy incident response package with diversion and coordinated corridor timing"
+        priority = "High"
+        owner = "Traffic control"
+        expected = "Contain queue spillback and protect corridor reliability around the hotspot."
+        subproblem = "incident_response_portfolio_problem"
+    elif event == "school_peak" or risk >= 0.62:
+        action = "Enable pedestrian protection and local speed mitigation around the hotspot"
+        priority = "High"
+        owner = "Safety operations"
+        expected = "Reduce vulnerable-user exposure and near-miss probability with a moderate traffic penalty."
+        subproblem = "safety_protection_problem"
+    elif event == "delivery_wave" or illegal_curb >= 0.22 or curb_occ >= 0.72:
+        action = "Tighten curbside enforcement and reallocate legal DUM slots"
+        priority = "High"
+        owner = "Logistics / curbside"
+        expected = "Lower illegal curb use, improve turnover and reduce pedestrian conflict."
+        subproblem = "curb_allocation_problem"
+    elif event == "gateway_surge" or gateway_delay >= 0.55:
+        action = "Activate access metering and staging package for the gateway"
+        priority = "High"
+        owner = "Gateway operations"
+        expected = "Reduce access delay and smooth arrivals/departures at the selected gateway."
+        subproblem = "gateway_resource_problem"
+    elif event == "event_release":
+        action = "Launch event dispersal package with multimodal priority tuning"
+        priority = "High"
+        owner = "Event mobility"
+        expected = "Absorb the post-event surge with better bus regularity and corridor performance."
+        subproblem = "event_release_rebalancing_problem"
+    elif event == "bus_bunching" or bunching >= 0.32:
+        action = "Increase bus priority and coordinated holding on the focused corridor"
+        priority = "Medium"
+        owner = "Transit operations"
+        expected = "Reduce bunching and improve commercial speed with limited side effects on general traffic."
+        subproblem = "bus_priority_problem"
+    elif network_speed <= 0.58:
+        action = "Activate coordinated corridor timing and selective diversion"
+        priority = "Medium"
+        owner = "Traffic control"
+        expected = "Improve network speed and travel-time reliability in the focused area."
+        subproblem = "signal_coordination_problem"
+
+    if asset_focus == "gateway" and "gateway" not in owner.lower():
+        action += " with gateway-specific coordination"
+    elif asset_focus == "intermodal" and owner in {"Traffic control", "Transit operations", "Urban operations"}:
+        action += " and intermodal priority tuning"
+
+    if route == "QUANTUM":
+        route_note = "Hybrid route suggests this package is worth solving as a discrete multiobjective intervention."
+    elif route == "FALLBACK_CLASSICAL":
+        route_note = "The system would prefer a classical deployment because the hybrid attempt was not admissible."
+    else:
+        route_note = "The system considers this package manageable with deterministic coordination."
+
+    return {
+        "action": action,
+        "priority": priority,
+        "owner": owner,
+        "expected": expected,
+        "subproblem": subproblem,
+        "route_note": route_note,
+    }
+
+
+
 init_state()
 ss = st.session_state
 hotspots_df = load_hotspots()
@@ -827,6 +915,20 @@ with tab_audit:
                 ("Gateway delay", float(row.get("gateway_delay_index", 0.0))),
             ], "Urban state snapshot")
         render_hotspot_summary(row.get("primary_hotspot_name"), hotspots_df, row.get("scenario_note"), title="Audit hotspot")
+        recommendation = recommend_action_from_record(row.to_dict())
+        rec_cols = st.columns(2)
+        with rec_cols[0]:
+            render_summary_table([
+                ("Action", recommendation["action"]),
+                ("Priority", recommendation["priority"]),
+                ("Responsible layer", recommendation["owner"]),
+            ], "Recommended operational action")
+        with rec_cols[1]:
+            render_summary_table([
+                ("Expected impact", recommendation["expected"]),
+                ("Subproblem", recommendation["subproblem"]),
+                ("Route note", recommendation["route_note"]),
+            ], "Operational expectation")
         with st.expander("Technical detail"):
             st.markdown("### Dispatch")
             st.json(safe_json_loads(row.get("dispatch_json")))
