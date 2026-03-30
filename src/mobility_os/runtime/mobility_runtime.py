@@ -1,41 +1,26 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from ..twins.base import TwinBase
-from ..twins.traffic_twins import IntersectionTwin, RoadCorridorTwin
-from ..twins.transit_twins import BusCorridorTwin
-from ..twins.logistics_twins import CurbZoneTwin
-from ..twins.risk_twins import RiskHotspotTwin
-from ..twins.gateway_twins import GatewayClusterTwin
-from ..utils.io import Hotspot, load_hotspots_csv
-from .state_aggregator import aggregate_city_state, propagate_twin_dependencies
-from .synthetic_city_engine import SyntheticCityEngine
-from .scenario_engine import ScenarioEngine
-from ..utils.io import load_json_data
-from ..decision.situation_interpreter import SituationInterpreter
-from ..decision.problem_decomposer import ProblemDecomposer
-from ..decision.priority_arbiter import PriorityArbiter
-from ..decision.route_selector import RouteSelector
-from ..decision.intervention_planner import InterventionPlanner
-from ..decision.validator import Validator
-from ..decision.decision_memory import DecisionMemory
-
 Mode = Literal["traffic", "safety", "logistics", "gateway", "event"]
-ScenarioName = Literal[
-    "corridor_congestion",
-    "school_area_risk",
-    "urban_logistics_saturation",
-    "gateway_access_stress",
-    "event_mobility",
-]
+ScenarioName = str
 Route = Literal["CLASSICAL", "QUANTUM", "FALLBACK_CLASSICAL"]
+AssetType = Literal[
+    "intersection",
+    "road_corridor",
+    "bus_corridor",
+    "curb_zone",
+    "risk_hotspot",
+    "city_mobility_system",
+]
 EventType = Literal[
     "demand_spike",
     "incident",
@@ -52,6 +37,294 @@ EventType = Literal[
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+
+@dataclass
+class Hotspot:
+    name: str
+    lat: float
+    lon: float
+    category: str
+    streets: str
+    why: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _default_hotspot_search_paths(explicit_path: Optional[str] = None) -> List[Path]:
+    here = Path(__file__).resolve().parent
+    candidates: List[Path] = []
+    if explicit_path:
+        candidates.append(Path(explicit_path))
+    candidates.extend([
+        here / "barcelona_mobility_hotspots.csv",
+        Path.cwd() / "barcelona_mobility_hotspots.csv",
+    ])
+    deduped: List[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(p)
+    return deduped
+
+
+def load_barcelona_hotspots(explicit_path: Optional[str] = None) -> Dict[str, Hotspot]:
+    for candidate in _default_hotspot_search_paths(explicit_path):
+        if candidate.exists():
+            with candidate.open("r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                hotspots: Dict[str, Hotspot] = {}
+                for row in reader:
+                    hs = Hotspot(
+                        name=row["name"],
+                        lat=float(row["lat"]),
+                        lon=float(row["lon"]),
+                        category=row["category"],
+                        streets=row["streets"],
+                        why=row["why"],
+                    )
+                    hotspots[hs.name] = hs
+                if hotspots:
+                    return hotspots
+    return {}
+
+
+@dataclass
+class TwinBase:
+    twin_id: str
+    asset_type: AssetType
+    name: str
+    ts: str
+    enabled: bool = True
+    alarms: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def snapshot(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def step(self, dt_h: float, context: Dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
+        raise NotImplementedError
+
+    def get_constraints(self) -> Dict[str, Any]:
+        return {}
+
+    def get_kpis(self) -> Dict[str, Any]:
+        return {}
+
+
+@dataclass
+class IntersectionTwin(TwinBase):
+    queue_ns: float = 18.0
+    queue_ew: float = 15.0
+    avg_delay_s: float = 34.0
+    phase_id: int = 0
+    cycle_time_s: float = 90.0
+    ped_wait_s: float = 24.0
+    bus_priority_request: int = 0
+    risk_score: float = 0.32
+    throughput_vph: float = 3200.0
+    phase_plan: int = 0
+    offset_s: float = 0.0
+    priority_mode: int = 1
+    ped_protection_mode: int = 0
+
+    def step(self, dt_h: float, context: Dict[str, Any]) -> None:
+        demand = context["demand"]
+        weather = context["weather"]
+        bus_ops = context["bus_ops"]
+        events = context["active_events"]
+        base_flow = float(demand["corridor_flow_vph"])
+        ped_flow = float(demand["ped_flow_pph"])
+        rain = float(weather["rain_intensity"])
+        incident_flag = any(ev["event_type"] == "incident" for ev in events)
+        school_flag = any(ev["event_type"] == "school_peak" for ev in events)
+        priority_effect = 0.10 * self.priority_mode
+        ped_protection_effect = 0.08 * self.ped_protection_mode
+        incident_penalty = 0.35 if incident_flag else 0.0
+        school_penalty = 0.15 if school_flag else 0.0
+        queue_pressure = 0.0022 * base_flow + 0.10 * rain + incident_penalty - 0.12 * priority_effect
+        self.queue_ns = max(3.0, self.queue_ns + np.random.normal(0, 1.2) + queue_pressure * 3.0 - 0.35 * self.offset_s / 10.0)
+        self.queue_ew = max(3.0, self.queue_ew + np.random.normal(0, 1.1) + queue_pressure * 2.5)
+        self.avg_delay_s = max(8.0, 12.0 + 1.4 * (self.queue_ns + self.queue_ew) + 0.02 * ped_flow + 12.0 * incident_penalty)
+        self.ped_wait_s = max(5.0, 14.0 + 0.012 * ped_flow + 7.0 * ped_protection_effect + 8.0 * school_penalty)
+        self.bus_priority_request = int(bus_ops["priority_requests"])
+        self.throughput_vph = max(1200.0, base_flow * (0.82 + 0.04 * self.priority_mode - 0.03 * rain - 0.08 * incident_penalty))
+        self.risk_score = float(np.clip(
+            0.22 + 0.003 * self.avg_delay_s + 0.002 * self.ped_wait_s + 0.03 * rain + 0.10 * school_penalty - 0.04 * self.ped_protection_mode,
+            0.0, 1.0
+        ))
+
+    def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
+        self.phase_plan = int(dispatch.get("signal_plan_id", self.phase_plan))
+        self.offset_s = float(dispatch.get("offset_s", self.offset_s))
+        self.priority_mode = int(dispatch.get("bus_priority_level", self.priority_mode))
+        self.ped_protection_mode = int(dispatch.get("ped_protection_mode", self.ped_protection_mode))
+
+
+@dataclass
+class RoadCorridorTwin(TwinBase):
+    avg_speed_kmh: float = 22.0
+    travel_time_index: float = 1.35
+    density_proxy: float = 0.55
+    queue_spillback_risk: float = 0.18
+    incident_state: bool = False
+    emission_proxy: float = 0.42
+    noise_proxy: float = 0.38
+    signal_coordination_mode: int = 1
+    diversion_mode: int = 0
+    lane_priority_mode: int = 1
+
+    def step(self, dt_h: float, context: Dict[str, Any]) -> None:
+        demand = context["demand"]
+        weather = context["weather"]
+        events = context["active_events"]
+        flow = float(demand["corridor_flow_vph"])
+        rain = float(weather["rain_intensity"])
+        incident_flag = any(ev["event_type"] == "incident" for ev in events)
+        event_release = any(ev["event_type"] == "event_release" for ev in events)
+        demand_spike = any(ev["event_type"] == "demand_spike" for ev in events)
+        self.incident_state = incident_flag
+        congestion_pressure = 0.00022 * flow + 0.28 * rain + (0.35 if incident_flag else 0.0) + (0.18 if demand_spike else 0.0) + (0.12 if event_release else 0.0)
+        coordination_effect = 0.08 * self.signal_coordination_mode
+        diversion_effect = 0.07 * self.diversion_mode
+        lane_effect = 0.06 * self.lane_priority_mode
+        self.avg_speed_kmh = float(np.clip(
+            33.0 - 18.0 * congestion_pressure + 2.5 * coordination_effect + 1.8 * diversion_effect + 1.3 * lane_effect + np.random.normal(0, 0.8),
+            6.0, 45.0
+        ))
+        self.travel_time_index = float(np.clip(40.0 / max(self.avg_speed_kmh, 1e-6), 0.8, 5.0))
+        self.density_proxy = float(np.clip(0.25 + 0.9 * congestion_pressure, 0.0, 1.0))
+        self.queue_spillback_risk = float(np.clip(0.15 + 0.85 * self.density_proxy - 0.06 * diversion_effect, 0.0, 1.0))
+        self.emission_proxy = float(np.clip(0.25 + 0.7 * self.travel_time_index / 3.5, 0.0, 1.2))
+        self.noise_proxy = float(np.clip(0.22 + 0.4 * self.density_proxy + 0.08 * flow / 6000.0, 0.0, 1.0))
+
+    def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
+        self.signal_coordination_mode = int(dispatch.get("signal_coordination_mode", self.signal_coordination_mode))
+        self.diversion_mode = int(dispatch.get("diversion_mode", self.diversion_mode))
+        self.lane_priority_mode = int(dispatch.get("lane_priority_mode", self.lane_priority_mode))
+
+
+@dataclass
+class BusCorridorTwin(TwinBase):
+    headway_real_s: float = 380.0
+    headway_target_s: float = 360.0
+    bunching_index: float = 0.22
+    commercial_speed_kmh: float = 12.8
+    occupancy_proxy: float = 0.58
+    priority_requests_active: int = 0
+    stops_pressure_index: float = 0.35
+    priority_level: int = 1
+    holding_strategy: int = 0
+    dispatch_adjustment: int = 0
+
+    def step(self, dt_h: float, context: Dict[str, Any]) -> None:
+        bus_ops = context["bus_ops"]
+        weather = context["weather"]
+        events = context["active_events"]
+        headway_pressure = float(bus_ops["headway_pressure"])
+        priority_requests = int(bus_ops["priority_requests"])
+        rain = float(weather["rain_intensity"])
+        bunching_event = any(ev["event_type"] == "bus_bunching" for ev in events)
+        incident_flag = any(ev["event_type"] == "incident" for ev in events)
+        self.priority_requests_active = priority_requests
+        control_gain = 0.08 * self.priority_level + 0.05 * self.holding_strategy + 0.04 * self.dispatch_adjustment
+        self.bunching_index = float(np.clip(
+            0.12 + 0.55 * headway_pressure + (0.15 if bunching_event else 0.0) + (0.10 if incident_flag else 0.0) - control_gain + np.random.normal(0, 0.015),
+            0.0, 1.0
+        ))
+        self.headway_real_s = float(np.clip(self.headway_target_s * (1.0 + 0.75 * self.bunching_index), 220.0, 900.0))
+        self.commercial_speed_kmh = float(np.clip(16.0 - 5.0 * self.bunching_index - 1.5 * rain + 0.9 * self.priority_level + np.random.normal(0, 0.2), 7.0, 18.0))
+        self.occupancy_proxy = float(np.clip(0.45 + 0.35 * headway_pressure + 0.10 * self.bunching_index, 0.0, 1.0))
+        self.stops_pressure_index = float(np.clip(0.20 + 0.55 * self.occupancy_proxy, 0.0, 1.0))
+
+    def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
+        self.priority_level = int(dispatch.get("bus_priority_level", self.priority_level))
+        self.holding_strategy = int(dispatch.get("holding_strategy", self.holding_strategy))
+        self.dispatch_adjustment = int(dispatch.get("dispatch_adjustment", self.dispatch_adjustment))
+
+
+@dataclass
+class CurbZoneTwin(TwinBase):
+    occupancy_rate: float = 0.66
+    illegal_occupancy_rate: float = 0.14
+    avg_dwell_time_min: float = 11.5
+    delivery_queue: float = 6.0
+    pickup_dropoff_pressure: float = 0.32
+    pedestrian_conflict_score: float = 0.20
+    slot_allocation_mode: int = 1
+    enforcement_level: int = 1
+    access_window_mode: int = 1
+
+    def step(self, dt_h: float, context: Dict[str, Any]) -> None:
+        curb_ops = context["curb_ops"]
+        demand = context["demand"]
+        events = context["active_events"]
+        delivery_pressure = float(curb_ops["delivery_pressure"])
+        illegal_pressure = float(curb_ops["illegal_parking_pressure"])
+        pickup_dropoff = float(curb_ops["pickup_dropoff_pressure"])
+        ped_flow = float(demand["ped_flow_pph"])
+        illegal_event = any(ev["event_type"] == "illegal_curb_occupation" for ev in events)
+        wave_event = any(ev["event_type"] == "delivery_wave" for ev in events)
+        slot_effect = 0.10 * self.slot_allocation_mode
+        enforcement_effect = 0.09 * self.enforcement_level
+        access_effect = 0.07 * self.access_window_mode
+        self.occupancy_rate = float(np.clip(0.42 + 0.55 * delivery_pressure + 0.15 * pickup_dropoff + (0.12 if wave_event else 0.0) - 0.06 * slot_effect, 0.0, 1.0))
+        self.illegal_occupancy_rate = float(np.clip(0.05 + 0.45 * illegal_pressure + (0.18 if illegal_event else 0.0) - 0.08 * enforcement_effect, 0.0, 1.0))
+        self.avg_dwell_time_min = float(np.clip(6.0 + 10.0 * self.occupancy_rate - 1.0 * access_effect, 3.0, 30.0))
+        self.delivery_queue = float(np.clip(2.0 + 14.0 * delivery_pressure + 3.0 * self.occupancy_rate - 1.4 * slot_effect, 0.0, 40.0))
+        self.pickup_dropoff_pressure = float(np.clip(pickup_dropoff, 0.0, 1.0))
+        self.pedestrian_conflict_score = float(np.clip(0.08 + 0.28 * self.illegal_occupancy_rate + 0.20 * self.occupancy_rate + 0.00012 * ped_flow, 0.0, 1.0))
+
+    def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
+        self.slot_allocation_mode = int(dispatch.get("curb_slot_policy", self.slot_allocation_mode))
+        self.enforcement_level = int(dispatch.get("enforcement_level", self.enforcement_level))
+        self.access_window_mode = int(dispatch.get("access_window_mode", self.access_window_mode))
+
+
+@dataclass
+class RiskHotspotTwin(TwinBase):
+    risk_score: float = 0.34
+    near_miss_index: float = 0.12
+    pedestrian_exposure: float = 0.38
+    bike_conflict_index: float = 0.20
+    visibility_proxy: float = 0.92
+    weather_modifier: float = 0.0
+    motorcycle_risk_proxy: float = 0.18
+    preventive_alert_level: int = 0
+    speed_mitigation_request: int = 0
+    signal_safety_mode: int = 0
+
+    def step(self, dt_h: float, context: Dict[str, Any]) -> None:
+        weather = context["weather"]
+        demand = context["demand"]
+        events = context["active_events"]
+        ped_flow = float(demand["ped_flow_pph"])
+        bike_flow = float(demand["bike_flow_pph"])
+        rain = float(weather["rain_intensity"])
+        visibility = float(weather["visibility"])
+        school_flag = any(ev["event_type"] == "school_peak" for ev in events)
+        incident_flag = any(ev["event_type"] == "incident" for ev in events)
+        self.visibility_proxy = visibility
+        self.weather_modifier = rain
+        self.pedestrian_exposure = float(np.clip(0.15 + ped_flow / 2500.0 + (0.18 if school_flag else 0.0), 0.0, 1.0))
+        self.bike_conflict_index = float(np.clip(0.08 + bike_flow / 2200.0 + 0.12 * rain, 0.0, 1.0))
+        self.motorcycle_risk_proxy = float(np.clip(0.08 + 0.14 * rain + 0.10 * incident_flag, 0.0, 1.0))
+        mitigation = 0.08 * self.preventive_alert_level + 0.10 * self.speed_mitigation_request + 0.10 * self.signal_safety_mode
+        self.near_miss_index = float(np.clip(0.04 + 0.18 * self.pedestrian_exposure + 0.12 * self.bike_conflict_index + 0.10 * rain + 0.05 * incident_flag - mitigation, 0.0, 1.0))
+        self.risk_score = float(np.clip(0.10 + 0.45 * self.near_miss_index + 0.20 * self.pedestrian_exposure + 0.14 * self.bike_conflict_index + 0.08 * self.motorcycle_risk_proxy, 0.0, 1.0))
+
+    def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
+        self.preventive_alert_level = int(dispatch.get("preventive_alert_level", self.preventive_alert_level))
+        self.speed_mitigation_request = int(dispatch.get("speed_mitigation_mode", self.speed_mitigation_request))
+        self.signal_safety_mode = int(dispatch.get("ped_protection_mode", self.signal_safety_mode))
+
+
+@dataclass
 class CityMobilitySystemTwin(TwinBase):
     mode: Mode = "traffic"
     scenario: ScenarioName = "corridor_congestion"
@@ -112,10 +385,6 @@ class MobilityDispatchProblem:
     discrete_ratio: float
     horizon_steps: int
     metadata: Dict[str, Any] = field(default_factory=dict)
-    situation_type: str = ""
-    urgency: str = "low"
-    dominant_objective: str = ""
-    subproblem_type: str = ""
 
 
 @dataclass
@@ -148,49 +417,8 @@ class MobilityExecRecord:
     fallback_triggered: bool
     fallback_reasons: List[str]
     route_reason: str
-    complexity_score: float = 0.0
-    discrete_ratio: float = 0.0
-    situation_type: str = ""
-    dominant_objective: str = ""
-    subproblem_type: str = ""
-    recommended_action: str = ""
-    action_priority: str = ""
-    responsible_layer: str = ""
-    expected_impact: str = ""
-    validation_status: str = ""
-    expected_value_of_hybrid: float = 0.0
-    pedestrian_risk: float = 0.0
-    bike_risk: float = 0.0
-    motorcycle_risk: float = 0.0
-    bus_conflict_risk: float = 0.0
-    logistics_conflict_risk: float = 0.0
-    gateway_risk: float = 0.0
-    weather_risk: float = 0.0
-    risk_burden: float = 0.0
-    dominant_risk_type: str = ""
-    risk_phase: str = "latent"
-    risk_forecast_score: float = 0.0
-    escalation_probability: float = 0.0
-    risk_forecast_trend: str = "stable"
-    preventive_action_recommended: str = ""
-    preventive_priority: str = ""
-    preventive_layer: str = ""
-    city_pressure_score: float = 0.0
-    intersection_operational_status: str = ""
-    road_corridor_operational_status: str = ""
-    bus_corridor_operational_status: str = ""
-    curb_zone_operational_status: str = ""
-    risk_hotspot_operational_status: str = ""
-    intersection_pressure_level: str = ""
-    road_corridor_pressure_level: str = ""
-    bus_corridor_pressure_level: str = ""
-    curb_zone_pressure_level: str = ""
-    risk_hotspot_pressure_level: str = ""
-    intersection_trend_state: str = ""
-    road_corridor_trend_state: str = ""
-    bus_corridor_trend_state: str = ""
-    curb_zone_trend_state: str = ""
-    risk_hotspot_trend_state: str = ""
+    complexity_score: float
+    discrete_ratio: float
     intersection_hotspot: str = ""
     road_corridor_hotspot: str = ""
     bus_corridor_hotspot: str = ""
@@ -344,28 +572,34 @@ class MobilityHybridOrchestrator:
     def __init__(self, seed: int = 42):
         self.classical = ClassicalMobilitySolver()
         self.quantum = MockQuantumMobilitySolver(seed=seed)
-        self.route_selector = RouteSelector()
 
-    def choose_route(self, state: Dict[str, Any], problem: MobilityDispatchProblem):
-        problem_view = {
-            "dominant_subproblem": problem.subproblem_type,
-            "complexity_score": problem.complexity_score,
-            "discrete_ratio": problem.discrete_ratio,
-            "urgency": problem.urgency,
-        }
-        return self.route_selector.choose_route(state, problem_view)
+    def choose_route(self, problem: MobilityDispatchProblem) -> Tuple[Route, str]:
+        event = problem.metadata.get("active_event")
+        risk = float(problem.metadata.get("risk_score", 0.0))
+        bunching = float(problem.metadata.get("bus_bunching_index", 0.0))
+        curb_pressure = float(problem.metadata.get("curb_pressure_index", 0.0))
+        gateway_pressure = float(problem.metadata.get("gateway_delay_index", 0.0))
+        if problem.mode == "safety" and (risk > 0.58 or event in {"school_peak", "incident"}):
+            return "CLASSICAL", "Classical selected because the step is in immediate safety protection mode."
+        if problem.complexity_score < 4.7 or problem.discrete_ratio < 0.40:
+            return "CLASSICAL", "Classical selected because the decision space is still limited."
+        if event in {"delivery_wave", "illegal_curb_occupation", "gateway_surge", "event_release", "bus_bunching"}:
+            return "QUANTUM", "Quantum selected because the step combines multiple discrete urban control actions."
+        if problem.mode == "logistics" and curb_pressure > 0.52:
+            return "QUANTUM", "Quantum selected because curbside allocation and enforcement are under high pressure."
+        if problem.mode == "gateway" and gateway_pressure > 0.52:
+            return "QUANTUM", "Quantum selected because access coordination across multiple resources is required."
+        if problem.mode == "traffic" and bunching > 0.30 and problem.complexity_score > 5.3:
+            return "QUANTUM", "Quantum selected because corridor coordination and bus priority conflict across several actions."
+        return "CLASSICAL", "Classical selected because the step remains manageable with deterministic coordination."
 
     def solve(self, state: Dict[str, Any], problem: MobilityDispatchProblem) -> Dict[str, Any]:
-        route_decision = self.choose_route(state, problem)
-        route = route_decision.route
-        reason = route_decision.route_reason
-
+        route, reason = self.choose_route(problem)
         if route == "CLASSICAL":
             dispatch, breakdown, confidence = self.classical.solve(state, problem)
             return {
                 "route": "CLASSICAL",
                 "route_reason": reason,
-                "expected_value_of_hybrid": route_decision.expected_value_of_hybrid,
                 "dispatch": dispatch,
                 "objective_breakdown": breakdown,
                 "confidence": confidence,
@@ -376,29 +610,23 @@ class MobilityHybridOrchestrator:
                 "qre_json": None,
                 "result_json": None,
             }
-
         dispatch, breakdown, confidence, qre, result = self.quantum.solve(state, problem)
-
         exec_ms = int(result["backend"]["queue_ms"] + result["backend"]["exec_ms"])
         latency_limit_ms = 1100 if problem.mode in {"gateway", "event"} else 900
         latency_breach = exec_ms > latency_limit_ms
-
         fallback_reasons: List[str] = []
         fallback_triggered = False
-
         if latency_breach:
             fallback_triggered = True
             fallback_reasons.append("SLA_BREACH")
         if confidence < 0.73:
             fallback_triggered = True
             fallback_reasons.append("LOW_CONFIDENCE")
-
         if fallback_triggered:
             dispatch, breakdown, confidence = self.classical.solve(state, problem)
             return {
                 "route": "FALLBACK_CLASSICAL",
                 "route_reason": "Fallback to classical because the hybrid attempt breached SLA or confidence constraints.",
-                "expected_value_of_hybrid": route_decision.expected_value_of_hybrid,
                 "dispatch": dispatch,
                 "objective_breakdown": breakdown,
                 "confidence": confidence,
@@ -409,11 +637,9 @@ class MobilityHybridOrchestrator:
                 "qre_json": json.dumps(qre, ensure_ascii=False),
                 "result_json": json.dumps(result, ensure_ascii=False),
             }
-
         return {
             "route": "QUANTUM",
             "route_reason": reason,
-            "expected_value_of_hybrid": route_decision.expected_value_of_hybrid,
             "dispatch": dispatch,
             "objective_breakdown": breakdown,
             "confidence": confidence,
@@ -434,19 +660,9 @@ class MobilityRuntime:
         self.rng = np.random.default_rng(self.seed)
         self.step_id = 0
         self.cumulative_operational_score = 0.0
-        self.policy_profile = "balanced"
         self.orchestrator = MobilityHybridOrchestrator(seed=self.seed)
-        self.synthetic_city_engine = SyntheticCityEngine(seed=self.seed, policy_profile=self.policy_profile)
-        self.scenario_engine = ScenarioEngine()
-        self.policy_profiles = load_json_data("policy_profiles.json", default={})
-        self.situation_interpreter = SituationInterpreter()
-        self.problem_decomposer = ProblemDecomposer()
-        self.priority_arbiter = PriorityArbiter()
-        self.intervention_planner = InterventionPlanner()
-        self.validator = Validator()
-        self.decision_memory = DecisionMemory(maxlen=32)
         self.records: List[MobilityExecRecord] = []
-        self.hotspots: Dict[str, Hotspot] = load_hotspots_csv(hotspots_csv)
+        self.hotspots: Dict[str, Hotspot] = load_barcelona_hotspots(hotspots_csv)
         self.twins: Dict[str, TwinBase] = {}
         self._build_twins()
 
@@ -458,7 +674,6 @@ class MobilityRuntime:
             "bus_corridor": BusCorridorTwin("bus_corridor", "bus_corridor", "Bus Corridor", ts),
             "curb_zone": CurbZoneTwin("curb_zone", "curb_zone", "Curb Zone", ts),
             "risk_hotspot": RiskHotspotTwin("risk_hotspot", "risk_hotspot", "Risk Hotspot", ts),
-            "gateway_cluster": GatewayClusterTwin("gateway_cluster", "gateway_cluster", "Gateway Cluster", ts),
             "city_mobility_system": CityMobilitySystemTwin("city_mobility_system", "city_mobility_system", "City Mobility System", ts),
         }
         self._attach_hotspots_to_twins()
@@ -467,7 +682,7 @@ class MobilityRuntime:
         return self.hotspots.get(name)
 
     def _scenario_hotspot_names(self) -> Dict[str, str]:
-        mappings: Dict[ScenarioName, Dict[str, str]] = {
+        mappings: Dict[str, Dict[str, str]] = {
             "corridor_congestion": {
                 "intersection": "Plaça de les Glòries Catalanes",
                 "road_corridor": "Plaça de les Glòries Catalanes",
@@ -503,8 +718,78 @@ class MobilityRuntime:
                 "curb_zone": "Plaça de Catalunya / Ronda Universitat",
                 "risk_hotspot": "Plaça d'Espanya",
             },
+            "corridor_congestion_multi_corridor": {
+                "intersection": "Plaça de les Glòries Catalanes",
+                "road_corridor": "Plaça de les Glòries Catalanes",
+                "bus_corridor": "Plaça d'Espanya",
+                "curb_zone": "Plaça de Catalunya / Ronda Universitat",
+                "risk_hotspot": "Sants Estació / Plaça dels Països Catalans",
+            },
+            "school_peak_rain_visibility": {
+                "intersection": "Plaça de Catalunya / Ronda Universitat",
+                "road_corridor": "Plaça d'Espanya",
+                "bus_corridor": "Sants Estació / Plaça dels Països Catalans",
+                "curb_zone": "Plaça de Catalunya / Ronda Universitat",
+                "risk_hotspot": "Plaça de Catalunya / Ronda Universitat",
+            },
+            "urban_logistics_black_friday": {
+                "intersection": "Plaça Cerdà / Passeig de la Zona Franca",
+                "road_corridor": "Paral·lel / Port Vell / salida 21 Ronda Litoral",
+                "bus_corridor": "Plaça de Catalunya / Ronda Universitat",
+                "curb_zone": "Plaça Cerdà / Passeig de la Zona Franca",
+                "risk_hotspot": "Ronda del Port VI / Carrer 3 (Puertas 29-30)",
+            },
+            "airport_departure_bank_stress": {
+                "intersection": "Plaça de Catalunya / Ronda Universitat",
+                "road_corridor": "Aeropuerto Josep Tarradellas BCN-El Prat T1",
+                "bus_corridor": "Aeropuerto Josep Tarradellas BCN-El Prat T2",
+                "curb_zone": "Aeropuerto Josep Tarradellas BCN-El Prat T1",
+                "risk_hotspot": "Aeropuerto Josep Tarradellas BCN-El Prat T2",
+            },
+            "port_truck_convoy_pressure": {
+                "intersection": "Plaça Cerdà / Passeig de la Zona Franca",
+                "road_corridor": "Ronda del Port VI / Carrer 3 (Puertas 29-30)",
+                "bus_corridor": "Paral·lel / Port Vell / salida 21 Ronda Litoral",
+                "curb_zone": "Moll Adossat / Port Creuers (Puerta 2)",
+                "risk_hotspot": "Ronda del Port VI / Carrer 3 (Puertas 29-30)",
+            },
+            "stadium_event_release_plus_rain": {
+                "intersection": "Plaça d'Espanya",
+                "road_corridor": "Plaça de Catalunya / Ronda Universitat",
+                "bus_corridor": "Sants Estació / Plaça dels Països Catalans",
+                "curb_zone": "Plaça d'Espanya",
+                "risk_hotspot": "Plaça d'Espanya",
+            },
+            "city_centre_tourism_weekend": {
+                "intersection": "Plaça de Catalunya / Ronda Universitat",
+                "road_corridor": "Paral·lel / Port Vell / salida 21 Ronda Litoral",
+                "bus_corridor": "Plaça de Catalunya / Ronda Universitat",
+                "curb_zone": "Plaça de Catalunya / Ronda Universitat",
+                "risk_hotspot": "Paral·lel / Port Vell / salida 21 Ronda Litoral",
+            },
+            "works_plus_incident_chain": {
+                "intersection": "Plaça de les Glòries Catalanes",
+                "road_corridor": "Plaça d'Espanya",
+                "bus_corridor": "Sants Estació / Plaça dels Països Catalans",
+                "curb_zone": "Plaça Cerdà / Passeig de la Zona Franca",
+                "risk_hotspot": "Plaça de les Glòries Catalanes",
+            },
+            "multimodal_hub_systemic_pressure": {
+                "intersection": "Sants Estació / Plaça dels Països Catalans",
+                "road_corridor": "Plaça de les Glòries Catalanes",
+                "bus_corridor": "Sants Estació / Plaça dels Països Catalans",
+                "curb_zone": "Plaça de Catalunya / Ronda Universitat",
+                "risk_hotspot": "Sants Estació / Plaça dels Països Catalans",
+            },
+            "compound_extreme_day": {
+                "intersection": "Plaça de Catalunya / Ronda Universitat",
+                "road_corridor": "Plaça d'Espanya",
+                "bus_corridor": "Sants Estació / Plaça dels Països Catalans",
+                "curb_zone": "Plaça Cerdà / Passeig de la Zona Franca",
+                "risk_hotspot": "Aeropuerto Josep Tarradellas BCN-El Prat T1",
+            },
         }
-        return mappings[self.scenario]
+        return mappings.get(self.scenario, mappings["corridor_congestion"])
 
     def _scenario_note(self) -> str:
         notes = {
@@ -513,8 +798,18 @@ class MobilityRuntime:
             "urban_logistics_saturation": "Scenario anchored to Plaça Cerdà, Ronda del Port VI and Port Vell as Barcelona logistics and curbside pressure nodes.",
             "gateway_access_stress": "Scenario anchored to airport terminals T1/T2 and cruise/port access nodes as Barcelona gateway hotspots.",
             "event_mobility": "Scenario anchored to Plaça d'Espanya, Plaça de Catalunya and Sants as high-pressure event and intermodal redistribution nodes.",
+            "corridor_congestion_multi_corridor": "High-complexity corridor scenario spanning Glòries, Espanya and Sants with coordinated congestion, bus regularity and city-centre pressure.",
+            "school_peak_rain_visibility": "Safety-heavy scenario combining school peak conditions, reduced visibility and elevated pedestrian exposure in central Barcelona.",
+            "urban_logistics_black_friday": "Black-Friday logistics scenario concentrated around Plaça Cerdà, Port Vell and the port logistics interface, with heavy curbside stress.",
+            "airport_departure_bank_stress": "Airport departure bank scenario focused on T1/T2 access, curbside pressure and multimodal gateway coordination.",
+            "port_truck_convoy_pressure": "Freight gateway scenario focused on Port access gates, heavy truck convoy pressure and spillback risk toward the urban network.",
+            "stadium_event_release_plus_rain": "High-complexity event release scenario around Espanya and Sants, intensified by rain and post-event multimodal redistribution.",
+            "city_centre_tourism_weekend": "Weekend tourism scenario centred on Plaça de Catalunya and Port Vell, with high pedestrian, transit and curbside pressure.",
+            "works_plus_incident_chain": "Compound disruption scenario combining works-style capacity loss, incident propagation and corridor/bus degradation.",
+            "multimodal_hub_systemic_pressure": "Systemic multimodal hub scenario around Sants and Glòries, coupling corridor, bus and interchange pressure.",
+            "compound_extreme_day": "Extreme compound scenario combining gateway stress, central pressure, logistics overload and systemic operational degradation.",
         }
-        return notes[self.scenario]
+        return notes.get(self.scenario, notes["corridor_congestion"])
 
     def _attach_hotspots_to_twins(self) -> None:
         mapping = self._scenario_hotspot_names()
@@ -557,24 +852,247 @@ class MobilityRuntime:
         return pd.DataFrame(rows)
 
     def _mode_for_scenario(self) -> Mode:
-        return self.scenario_engine.mode_for_scenario(self.scenario)
+        if self.scenario in {"school_area_risk", "school_peak_rain_visibility"}:
+            return "safety"
+        if self.scenario in {"urban_logistics_saturation", "urban_logistics_black_friday", "port_truck_convoy_pressure"}:
+            return "logistics"
+        if self.scenario in {"gateway_access_stress", "airport_departure_bank_stress"}:
+            return "gateway"
+        if self.scenario in {"event_mobility", "stadium_event_release_plus_rain", "city_centre_tourism_weekend", "compound_extreme_day"}:
+            return "event"
+        return "traffic"
 
     def _generate_base_context(self) -> ScenarioContext:
         mode = self._mode_for_scenario()
-        base = self.synthetic_city_engine.generate_base_context(self.scenario, self.step_id, mode)
+        hour = (self.step_id % 288) / 12.0
+        peak = 1.0 if 7.0 <= hour <= 10.0 or 17.0 <= hour <= 20.0 else 0.0
+        rain_intensity = 0.0
+        visibility = 0.95
+        corridor_flow = 3600.0 + 1200.0 * peak + 450.0 * np.sin(hour / 24.0 * 2 * np.pi) + self.rng.normal(0, 120)
+        ped_flow = 550.0 + 320.0 * peak + 120.0 * np.sin((hour + 2.0) / 24.0 * 2 * np.pi) + self.rng.normal(0, 40)
+        bike_flow = 280.0 + 120.0 * np.sin((hour - 1.5) / 24.0 * 2 * np.pi) + self.rng.normal(0, 25)
+        headway_pressure = 0.35 + 0.25 * peak + self.rng.normal(0, 0.03)
+        delivery_pressure = 0.30 + 0.22 * (10.0 <= hour <= 15.0) + self.rng.normal(0, 0.03)
+        illegal_pressure = 0.18 + 0.10 * (11.0 <= hour <= 14.0) + self.rng.normal(0, 0.02)
+        pickup_dropoff_pressure = 0.22 + 0.18 * peak + self.rng.normal(0, 0.02)
+        gateway_surge = 0.15 + 0.18 * peak + self.rng.normal(0, 0.02)
+
+        # scenario-level baseline modifiers for high-complexity cases
+        if self.scenario == "corridor_congestion_multi_corridor":
+            corridor_flow *= 1.22
+            headway_pressure += 0.12
+            pickup_dropoff_pressure += 0.06
+        elif self.scenario == "school_peak_rain_visibility":
+            ped_flow *= 1.45
+            corridor_flow *= 1.08
+            rain_intensity = 0.35
+            visibility = 0.72
+            bike_flow *= 0.92
+        elif self.scenario == "urban_logistics_black_friday":
+            delivery_pressure += 0.30
+            illegal_pressure += 0.16
+            pickup_dropoff_pressure += 0.10
+            corridor_flow *= 1.10
+        elif self.scenario == "airport_departure_bank_stress":
+            gateway_surge += 0.36
+            pickup_dropoff_pressure += 0.18
+            corridor_flow *= 1.08
+        elif self.scenario == "port_truck_convoy_pressure":
+            gateway_surge += 0.28
+            delivery_pressure += 0.18
+            corridor_flow *= 1.14
+        elif self.scenario == "stadium_event_release_plus_rain":
+            corridor_flow *= 1.16
+            ped_flow *= 1.30
+            headway_pressure += 0.14
+            rain_intensity = 0.42
+            visibility = 0.68
+        elif self.scenario == "city_centre_tourism_weekend":
+            ped_flow *= 1.40
+            pickup_dropoff_pressure += 0.16
+            corridor_flow *= 1.06
+        elif self.scenario == "works_plus_incident_chain":
+            corridor_flow *= 1.12
+            headway_pressure += 0.10
+            gateway_surge += 0.08
+        elif self.scenario == "multimodal_hub_systemic_pressure":
+            corridor_flow *= 1.18
+            headway_pressure += 0.16
+            pickup_dropoff_pressure += 0.08
+            gateway_surge += 0.12
+        elif self.scenario == "compound_extreme_day":
+            corridor_flow *= 1.25
+            ped_flow *= 1.28
+            headway_pressure += 0.18
+            delivery_pressure += 0.18
+            illegal_pressure += 0.12
+            pickup_dropoff_pressure += 0.14
+            gateway_surge += 0.22
+            rain_intensity = 0.30
+            visibility = 0.75
+
         return ScenarioContext(
             scenario=self.scenario,
             mode=mode,
-            weather=base["weather"],
-            demand=base["demand"],
-            bus_ops=base["bus_ops"],
-            curb_ops=base["curb_ops"],
-            gateway_ops=base["gateway_ops"],
+            weather={"rain_intensity": float(np.clip(rain_intensity, 0.0, 1.0)), "visibility": float(np.clip(visibility, 0.2, 1.0))},
+            demand={
+                "corridor_flow_vph": float(max(1400.0, corridor_flow)),
+                "ped_flow_pph": float(max(100.0, ped_flow)),
+                "bike_flow_pph": float(max(60.0, bike_flow)),
+            },
+            bus_ops={
+                "priority_requests": int(max(0, round(2 + 4 * peak + self.rng.normal(0, 1.0)))),
+                "headway_pressure": float(np.clip(headway_pressure, 0.0, 1.0)),
+            },
+            curb_ops={
+                "delivery_pressure": float(np.clip(delivery_pressure, 0.0, 1.0)),
+                "illegal_parking_pressure": float(np.clip(illegal_pressure, 0.0, 1.0)),
+                "pickup_dropoff_pressure": float(np.clip(pickup_dropoff_pressure, 0.0, 1.0)),
+            },
+            gateway_ops={"surge_factor": float(np.clip(gateway_surge, 0.0, 1.0))},
             active_events=[],
         )
 
     def _generate_events(self, ctx: ScenarioContext) -> None:
-        self.scenario_engine.apply(self.scenario, self.step_id, ctx, ScenarioEvent)
+        events: List[ScenarioEvent] = []
+        s = self.scenario
+
+        # Base scenarios
+        if s == "corridor_congestion":
+            if self.step_id % 24 in range(7, 12):
+                events.append(ScenarioEvent("demand_spike", 0.7, self.step_id, self.step_id, {}))
+            if self.step_id % 31 in (15, 16):
+                events.append(ScenarioEvent("bus_bunching", 0.6, self.step_id, self.step_id, {}))
+        elif s == "school_area_risk":
+            if self.step_id % 24 in range(7, 11):
+                events.append(ScenarioEvent("school_peak", 0.9, self.step_id, self.step_id, {}))
+            if self.step_id % 19 == 8:
+                events.append(ScenarioEvent("rain_event", 0.4, self.step_id, self.step_id, {}))
+        elif s == "urban_logistics_saturation":
+            if self.step_id % 20 in range(8, 14):
+                events.append(ScenarioEvent("delivery_wave", 0.85, self.step_id, self.step_id, {}))
+            if self.step_id % 17 in (5, 6):
+                events.append(ScenarioEvent("illegal_curb_occupation", 0.7, self.step_id, self.step_id, {}))
+        elif s == "gateway_access_stress":
+            if self.step_id % 22 in range(6, 11):
+                events.append(ScenarioEvent("gateway_surge", 0.8, self.step_id, self.step_id, {}))
+            if self.step_id % 29 == 12:
+                events.append(ScenarioEvent("incident", 0.7, self.step_id, self.step_id, {}))
+        elif s == "event_mobility":
+            if self.step_id % 26 in range(12, 18):
+                events.append(ScenarioEvent("event_release", 0.95, self.step_id, self.step_id, {}))
+            if self.step_id % 18 in (9, 10):
+                events.append(ScenarioEvent("bus_bunching", 0.65, self.step_id, self.step_id, {}))
+            if self.step_id % 33 == 20:
+                events.append(ScenarioEvent("rain_event", 0.45, self.step_id, self.step_id, {}))
+
+        # High-complexity scenarios
+        elif s == "corridor_congestion_multi_corridor":
+            if self.step_id % 18 in range(6, 12):
+                events.append(ScenarioEvent("demand_spike", 0.9, self.step_id, self.step_id, {}))
+            if self.step_id % 20 in (8, 9, 10):
+                events.append(ScenarioEvent("bus_bunching", 0.75, self.step_id, self.step_id, {}))
+            if self.step_id % 36 == 14:
+                events.append(ScenarioEvent("incident", 0.55, self.step_id, self.step_id, {}))
+        elif s == "school_peak_rain_visibility":
+            if self.step_id % 24 in range(7, 12):
+                events.append(ScenarioEvent("school_peak", 0.95, self.step_id, self.step_id, {}))
+            if self.step_id % 16 in (6, 7, 8):
+                events.append(ScenarioEvent("rain_event", 0.65, self.step_id, self.step_id, {}))
+            if self.step_id % 30 == 9:
+                events.append(ScenarioEvent("incident", 0.35, self.step_id, self.step_id, {}))
+        elif s == "urban_logistics_black_friday":
+            if self.step_id % 14 in range(8, 13):
+                events.append(ScenarioEvent("delivery_wave", 0.95, self.step_id, self.step_id, {}))
+            if self.step_id % 15 in (6, 7, 8):
+                events.append(ScenarioEvent("illegal_curb_occupation", 0.85, self.step_id, self.step_id, {}))
+            if self.step_id % 24 in (11, 12):
+                events.append(ScenarioEvent("demand_spike", 0.5, self.step_id, self.step_id, {}))
+        elif s == "airport_departure_bank_stress":
+            if self.step_id % 18 in range(5, 10):
+                events.append(ScenarioEvent("gateway_surge", 0.95, self.step_id, self.step_id, {}))
+            if self.step_id % 21 in (8, 9):
+                events.append(ScenarioEvent("bus_bunching", 0.55, self.step_id, self.step_id, {}))
+            if self.step_id % 34 == 13:
+                events.append(ScenarioEvent("incident", 0.45, self.step_id, self.step_id, {}))
+        elif s == "port_truck_convoy_pressure":
+            if self.step_id % 16 in range(6, 11):
+                events.append(ScenarioEvent("gateway_surge", 0.85, self.step_id, self.step_id, {}))
+            if self.step_id % 17 in range(8, 12):
+                events.append(ScenarioEvent("delivery_wave", 0.75, self.step_id, self.step_id, {}))
+            if self.step_id % 28 == 10:
+                events.append(ScenarioEvent("incident", 0.65, self.step_id, self.step_id, {}))
+        elif s == "stadium_event_release_plus_rain":
+            if self.step_id % 20 in range(11, 16):
+                events.append(ScenarioEvent("event_release", 0.95, self.step_id, self.step_id, {}))
+            if self.step_id % 20 in (11, 12, 13):
+                events.append(ScenarioEvent("rain_event", 0.6, self.step_id, self.step_id, {}))
+            if self.step_id % 22 in (12, 13):
+                events.append(ScenarioEvent("bus_bunching", 0.75, self.step_id, self.step_id, {}))
+        elif s == "city_centre_tourism_weekend":
+            if self.step_id % 18 in range(10, 16):
+                events.append(ScenarioEvent("demand_spike", 0.75, self.step_id, self.step_id, {}))
+            if self.step_id % 19 in (12, 13):
+                events.append(ScenarioEvent("bus_bunching", 0.5, self.step_id, self.step_id, {}))
+            if self.step_id % 17 in (11, 12):
+                events.append(ScenarioEvent("illegal_curb_occupation", 0.55, self.step_id, self.step_id, {}))
+        elif s == "works_plus_incident_chain":
+            if self.step_id % 15 in range(6, 11):
+                events.append(ScenarioEvent("incident", 0.9, self.step_id, self.step_id, {}))
+            if self.step_id % 18 in (7, 8):
+                events.append(ScenarioEvent("demand_spike", 0.7, self.step_id, self.step_id, {}))
+            if self.step_id % 22 in (9, 10):
+                events.append(ScenarioEvent("bus_bunching", 0.55, self.step_id, self.step_id, {}))
+        elif s == "multimodal_hub_systemic_pressure":
+            if self.step_id % 18 in range(7, 12):
+                events.append(ScenarioEvent("bus_bunching", 0.8, self.step_id, self.step_id, {}))
+            if self.step_id % 20 in range(8, 12):
+                events.append(ScenarioEvent("event_release", 0.65, self.step_id, self.step_id, {}))
+            if self.step_id % 24 in (9, 10):
+                events.append(ScenarioEvent("gateway_surge", 0.6, self.step_id, self.step_id, {}))
+        elif s == "compound_extreme_day":
+            if self.step_id % 14 in range(5, 10):
+                events.append(ScenarioEvent("demand_spike", 0.85, self.step_id, self.step_id, {}))
+            if self.step_id % 15 in (6, 7):
+                events.append(ScenarioEvent("rain_event", 0.55, self.step_id, self.step_id, {}))
+            if self.step_id % 16 in (8, 9):
+                events.append(ScenarioEvent("delivery_wave", 0.8, self.step_id, self.step_id, {}))
+            if self.step_id % 17 in (10, 11):
+                events.append(ScenarioEvent("gateway_surge", 0.75, self.step_id, self.step_id, {}))
+            if self.step_id % 18 in (12, 13):
+                events.append(ScenarioEvent("bus_bunching", 0.7, self.step_id, self.step_id, {}))
+            if self.step_id % 21 == 14:
+                events.append(ScenarioEvent("incident", 0.6, self.step_id, self.step_id, {}))
+
+        ctx.active_events = events
+        for ev in events:
+            if ev.event_type == "demand_spike":
+                ctx.demand["corridor_flow_vph"] *= 1.18
+                ctx.curb_ops["pickup_dropoff_pressure"] = min(1.0, ctx.curb_ops["pickup_dropoff_pressure"] + 0.05)
+            elif ev.event_type == "incident":
+                ctx.demand["corridor_flow_vph"] *= 1.08
+                ctx.bus_ops["headway_pressure"] = min(1.0, ctx.bus_ops["headway_pressure"] + 0.08)
+            elif ev.event_type == "school_peak":
+                ctx.demand["ped_flow_pph"] *= 1.40
+            elif ev.event_type == "rain_event":
+                ctx.weather["rain_intensity"] = max(ctx.weather["rain_intensity"], 0.45)
+                ctx.weather["visibility"] = min(ctx.weather["visibility"], 0.70)
+                ctx.demand["bike_flow_pph"] *= 0.9
+            elif ev.event_type == "bus_bunching":
+                ctx.bus_ops["headway_pressure"] = min(1.0, ctx.bus_ops["headway_pressure"] + 0.25)
+                ctx.bus_ops["priority_requests"] += 1
+            elif ev.event_type == "illegal_curb_occupation":
+                ctx.curb_ops["illegal_parking_pressure"] = min(1.0, ctx.curb_ops["illegal_parking_pressure"] + 0.35)
+            elif ev.event_type == "delivery_wave":
+                ctx.curb_ops["delivery_pressure"] = min(1.0, ctx.curb_ops["delivery_pressure"] + 0.35)
+            elif ev.event_type == "gateway_surge":
+                ctx.gateway_ops["surge_factor"] = min(1.0, ctx.gateway_ops["surge_factor"] + 0.45)
+                ctx.curb_ops["pickup_dropoff_pressure"] = min(1.0, ctx.curb_ops["pickup_dropoff_pressure"] + 0.08)
+            elif ev.event_type == "event_release":
+                ctx.demand["corridor_flow_vph"] *= 1.12
+                ctx.demand["ped_flow_pph"] *= 1.25
+                ctx.bus_ops["priority_requests"] += 2
+                ctx.gateway_ops["surge_factor"] = min(1.0, ctx.gateway_ops["surge_factor"] + 0.25)
 
     def get_context(self) -> ScenarioContext:
         ctx = self._generate_base_context()
@@ -593,16 +1111,70 @@ class MobilityRuntime:
         }
         for twin in self.twins.values():
             twin.ts = utc_now_iso()
-        self.twins["road_corridor"].step(dt_h, ctx_dict)
         self.twins["intersection"].step(dt_h, ctx_dict)
+        self.twins["road_corridor"].step(dt_h, ctx_dict)
         self.twins["bus_corridor"].step(dt_h, ctx_dict)
         self.twins["curb_zone"].step(dt_h, ctx_dict)
-        self.twins["gateway_cluster"].step(dt_h, ctx_dict)
-        propagate_twin_dependencies(self.twins, ctx)
         self.twins["risk_hotspot"].step(dt_h, ctx_dict)
 
     def aggregate_state(self, ctx: ScenarioContext) -> Dict[str, Any]:
-        return aggregate_city_state(self, ctx)
+        inter = self.twins["intersection"]
+        corridor = self.twins["road_corridor"]
+        bus = self.twins["bus_corridor"]
+        curb = self.twins["curb_zone"]
+        risk = self.twins["risk_hotspot"]
+        assert isinstance(inter, IntersectionTwin)
+        assert isinstance(corridor, RoadCorridorTwin)
+        assert isinstance(bus, BusCorridorTwin)
+        assert isinstance(curb, CurbZoneTwin)
+        assert isinstance(risk, RiskHotspotTwin)
+        active_event = ctx.active_events[0].event_type if ctx.active_events else None
+        network_speed_index = float(np.clip(corridor.avg_speed_kmh / 32.0, 0.0, 1.2))
+        corridor_reliability_index = float(np.clip(1.0 / corridor.travel_time_index, 0.0, 1.2))
+        curb_pressure_index = float(np.clip(0.55 * curb.occupancy_rate + 0.45 * curb.illegal_occupancy_rate, 0.0, 1.0))
+        gateway_delay_index = float(np.clip(0.18 + 0.65 * ctx.gateway_ops["surge_factor"] + 0.12 * corridor.queue_spillback_risk, 0.0, 1.0))
+        coordination_flag = bus.bunching_index > 0.28 and corridor.queue_spillback_risk > 0.35
+        logistics_pressure_flag = curb.delivery_queue > 8.0 or curb.illegal_occupancy_rate > 0.22
+        hotspot_map = self._scenario_hotspot_names()
+        primary_name = hotspot_map["road_corridor"]
+        primary_hotspot = self._hotspot(primary_name)
+        return {
+            "ts": utc_now_iso(),
+            "mode": ctx.mode,
+            "scenario": ctx.scenario,
+            "scenario_note": self._scenario_note(),
+            "active_event": active_event,
+            "intersection_hotspot": hotspot_map["intersection"],
+            "road_corridor_hotspot": hotspot_map["road_corridor"],
+            "bus_corridor_hotspot": hotspot_map["bus_corridor"],
+            "curb_zone_hotspot": hotspot_map["curb_zone"],
+            "risk_hotspot_name": hotspot_map["risk_hotspot"],
+            "primary_hotspot_name": primary_name,
+            "primary_hotspot_lat": primary_hotspot.lat if primary_hotspot else 41.3851,
+            "primary_hotspot_lon": primary_hotspot.lon if primary_hotspot else 2.1734,
+            "network_speed_index": network_speed_index,
+            "corridor_reliability_index": corridor_reliability_index,
+            "corridor_delay_s": corridor.travel_time_index * 75.0,
+            "bus_bunching_index": bus.bunching_index,
+            "bus_commercial_speed_kmh": bus.commercial_speed_kmh,
+            "bus_priority_requests": bus.priority_requests_active,
+            "curb_occupancy_rate": curb.occupancy_rate,
+            "illegal_curb_occupancy_rate": curb.illegal_occupancy_rate,
+            "delivery_queue": curb.delivery_queue,
+            "curb_pressure_index": curb_pressure_index,
+            "risk_score": risk.risk_score,
+            "near_miss_index": risk.near_miss_index,
+            "pedestrian_exposure": risk.pedestrian_exposure,
+            "bike_conflict_index": risk.bike_conflict_index,
+            "gateway_delay_index": gateway_delay_index,
+            "coordination_flag": coordination_flag,
+            "logistics_pressure_flag": logistics_pressure_flag,
+            "rain_flag": ctx.weather["rain_intensity"] > 0.20,
+            "school_peak_flag": active_event == "school_peak",
+            "incident_flag": active_event == "incident",
+            "delivery_wave_flag": active_event == "delivery_wave",
+            "gateway_surge_flag": active_event == "gateway_surge",
+        }
 
     def build_problem(self, state: Dict[str, Any], ctx: ScenarioContext) -> MobilityDispatchProblem:
         discrete_vars = 8
@@ -624,12 +1196,6 @@ class MobilityRuntime:
         mode_bonus = {"traffic": 0.7, "safety": 0.4, "logistics": 1.0, "gateway": 1.0, "event": 1.2}[ctx.mode]
         complexity = discrete_vars * 0.55 + continuous_vars * 0.15 + event_bonus + coupling_bonus + mode_bonus
         discrete_ratio = discrete_vars / max(discrete_vars + continuous_vars, 1)
-
-        situation = self.situation_interpreter.interpret(state)
-        subproblems = self.problem_decomposer.decompose(state, situation)
-        arbitration = self.priority_arbiter.arbitrate(state, situation, subproblems)
-        dominant_subproblem = arbitration["dominant_subproblem"]
-
         constraints = {
             "network_speed_index": state["network_speed_index"],
             "corridor_reliability_index": state["corridor_reliability_index"],
@@ -639,11 +1205,11 @@ class MobilityRuntime:
             "gateway_delay_index": state["gateway_delay_index"],
         }
         objective_terms = {
-            "delay_penalty_weight": arbitration["objective_weights"]["delay"],
-            "bunching_penalty_weight": arbitration["objective_weights"]["transit"],
-            "risk_penalty_weight": arbitration["objective_weights"]["risk"],
-            "curb_penalty_weight": arbitration["objective_weights"]["logistics"],
-            "gateway_penalty_weight": arbitration["objective_weights"]["gateway"],
+            "delay_penalty_weight": 1.0,
+            "bunching_penalty_weight": 1.0,
+            "risk_penalty_weight": 1.2,
+            "curb_penalty_weight": 0.9,
+            "gateway_penalty_weight": 0.8,
         }
         metadata = {
             "active_event": state["active_event"],
@@ -662,11 +1228,6 @@ class MobilityRuntime:
             "bus_corridor_hotspot": state["bus_corridor_hotspot"],
             "curb_zone_hotspot": state["curb_zone_hotspot"],
             "risk_hotspot_name": state["risk_hotspot_name"],
-            "subproblems": [sp.subproblem_type for sp in subproblems],
-            "situation_notes": situation.notes,
-            "risk_phase": state.get("risk_phase", "latent"),
-            "dominant_risk_type": state.get("dominant_risk_type", ""),
-            "risk_burden": state.get("risk_burden", 0.0),
         }
         return MobilityDispatchProblem(
             step_id=self.step_id,
@@ -679,15 +1240,17 @@ class MobilityRuntime:
             discrete_ratio=discrete_ratio,
             horizon_steps=12,
             metadata=metadata,
-            situation_type=situation.situation_type,
-            urgency=situation.urgency,
-            dominant_objective=situation.dominant_objective,
-            subproblem_type=dominant_subproblem,
         )
 
     def validate_dispatch(self, dispatch: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
-        result = self.validator.validate(state, dispatch)
-        return result.dispatch
+        dispatch = dict(dispatch)
+        dispatch["bus_priority_level"] = int(np.clip(dispatch.get("bus_priority_level", 1), 0, 3))
+        dispatch["signal_plan_id"] = int(np.clip(dispatch.get("signal_plan_id", 1), 0, 3))
+        dispatch["curb_slot_policy"] = int(np.clip(dispatch.get("curb_slot_policy", 1), 0, 2))
+        dispatch["enforcement_level"] = int(np.clip(dispatch.get("enforcement_level", 1), 0, 2))
+        dispatch["ped_protection_mode"] = int(np.clip(dispatch.get("ped_protection_mode", 0), 0, 1))
+        dispatch["speed_mitigation_mode"] = int(np.clip(dispatch.get("speed_mitigation_mode", 0), 0, 1))
+        return dispatch
 
     def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
         self.twins["intersection"].apply_dispatch(dispatch, dt_h)
@@ -696,23 +1259,15 @@ class MobilityRuntime:
         self.twins["curb_zone"].apply_dispatch(dispatch, dt_h)
         self.twins["risk_hotspot"].apply_dispatch(dispatch, dt_h)
 
-    def compute_record(
-        self,
-        state: Dict[str, Any],
-        decision: Dict[str, Any],
-        problem: MobilityDispatchProblem,
-        intervention_plan,
-        validation_result,
-    ) -> MobilityExecRecord:
+    def compute_record(self, state: Dict[str, Any], decision: Dict[str, Any], problem: MobilityDispatchProblem) -> MobilityExecRecord:
         step_operational_score = (
-            0.30 * state["network_speed_index"]
-            + 0.20 * state["corridor_reliability_index"]
-            + 0.15 * (1.0 - state["bus_bunching_index"])
-            + 0.15 * (1.0 - state["curb_pressure_index"])
-            + 0.20 * (1.0 - state["risk_score"])
+            0.30 * state["network_speed_index"] +
+            0.20 * state["corridor_reliability_index"] +
+            0.15 * (1.0 - state["bus_bunching_index"]) +
+            0.15 * (1.0 - state["curb_pressure_index"]) +
+            0.20 * (1.0 - state["risk_score"])
         )
         self.cumulative_operational_score += step_operational_score
-
         return MobilityExecRecord(
             step_id=self.step_id,
             ts=utc_now_iso(),
@@ -733,38 +1288,6 @@ class MobilityRuntime:
             pedestrian_exposure=state["pedestrian_exposure"],
             bike_conflict_index=state["bike_conflict_index"],
             gateway_delay_index=state["gateway_delay_index"],
-            pedestrian_risk=state.get("pedestrian_risk", 0.0),
-            bike_risk=state.get("bike_risk", 0.0),
-            motorcycle_risk=state.get("motorcycle_risk", 0.0),
-            bus_conflict_risk=state.get("bus_conflict_risk", 0.0),
-            logistics_conflict_risk=state.get("logistics_conflict_risk", 0.0),
-            gateway_risk=state.get("gateway_risk", 0.0),
-            weather_risk=state.get("weather_risk", 0.0),
-            risk_burden=state.get("risk_burden", 0.0),
-            dominant_risk_type=state.get("dominant_risk_type", ""),
-            risk_phase=state.get("risk_phase", "latent"),
-            risk_forecast_score=state.get("risk_forecast_score", 0.0),
-            escalation_probability=state.get("escalation_probability", 0.0),
-            risk_forecast_trend=state.get("risk_forecast_trend", "stable"),
-            preventive_action_recommended=state.get("preventive_action_recommended", ""),
-            preventive_priority=state.get("preventive_priority", ""),
-            preventive_layer=state.get("preventive_layer", ""),
-            city_pressure_score=state.get("city_pressure_score", 0.0),
-            intersection_operational_status=state.get("intersection_operational_status", ""),
-            road_corridor_operational_status=state.get("road_corridor_operational_status", ""),
-            bus_corridor_operational_status=state.get("bus_corridor_operational_status", ""),
-            curb_zone_operational_status=state.get("curb_zone_operational_status", ""),
-            risk_hotspot_operational_status=state.get("risk_hotspot_operational_status", ""),
-            intersection_pressure_level=state.get("intersection_pressure_level", ""),
-            road_corridor_pressure_level=state.get("road_corridor_pressure_level", ""),
-            bus_corridor_pressure_level=state.get("bus_corridor_pressure_level", ""),
-            curb_zone_pressure_level=state.get("curb_zone_pressure_level", ""),
-            risk_hotspot_pressure_level=state.get("risk_hotspot_pressure_level", ""),
-            intersection_trend_state=state.get("intersection_trend_state", ""),
-            road_corridor_trend_state=state.get("road_corridor_trend_state", ""),
-            bus_corridor_trend_state=state.get("bus_corridor_trend_state", ""),
-            curb_zone_trend_state=state.get("curb_zone_trend_state", ""),
-            risk_hotspot_trend_state=state.get("risk_hotspot_trend_state", ""),
             step_operational_score=step_operational_score,
             cumulative_operational_score=self.cumulative_operational_score,
             decision_route=decision["route"],
@@ -774,15 +1297,6 @@ class MobilityRuntime:
             fallback_triggered=decision["fallback_triggered"],
             fallback_reasons=decision["fallback_reasons"],
             route_reason=decision["route_reason"],
-            situation_type=problem.situation_type,
-            dominant_objective=problem.dominant_objective,
-            subproblem_type=problem.subproblem_type,
-            recommended_action=intervention_plan.action,
-            action_priority=intervention_plan.action_priority,
-            responsible_layer=intervention_plan.responsible_layer,
-            expected_impact=intervention_plan.expected_impact,
-            validation_status=validation_result.validation_status,
-            expected_value_of_hybrid=decision.get("expected_value_of_hybrid", 0.0),
             complexity_score=problem.complexity_score,
             discrete_ratio=problem.discrete_ratio,
             intersection_hotspot=state["intersection_hotspot"],
@@ -807,33 +1321,14 @@ class MobilityRuntime:
         state = self.aggregate_state(ctx)
         problem = self.build_problem(state, ctx)
         decision = self.orchestrator.solve(state, problem)
-
-        intervention_plan = self.intervention_planner.plan(
-            state=state,
-            dominant_subproblem=problem.subproblem_type,
-            route=decision["route"],
-        )
-        dispatch = {**decision["dispatch"], **intervention_plan.dispatch_overrides}
-        validation_result = self.validator.validate(state, dispatch)
-        dispatch = validation_result.dispatch
-
+        dispatch = self.validate_dispatch(decision["dispatch"], state)
         decision["dispatch"] = dispatch
         self.apply_dispatch(dispatch, dt_h)
-        record = self.compute_record(state, decision, problem, intervention_plan, validation_result)
+        record = self.compute_record(state, decision, problem)
         self.records.append(record)
-        self.decision_memory.remember(
-            {
-                "step_id": self.step_id,
-                "recommended_action": intervention_plan.action,
-                "decision_route": decision["route"],
-                "subproblem_type": problem.subproblem_type,
-                "primary_hotspot_name": state["primary_hotspot_name"],
-            }
-        )
         return record
 
     def dataframe(self) -> pd.DataFrame:
-
         return pd.DataFrame([asdict(r) for r in self.records])
 
     def latest_state(self) -> Dict[str, Any]:
