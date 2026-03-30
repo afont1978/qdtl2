@@ -14,6 +14,13 @@ from ..twins.transit_twins import BusCorridorTwin
 from ..twins.logistics_twins import CurbZoneTwin
 from ..twins.risk_twins import RiskHotspotTwin
 from ..utils.io import Hotspot, load_hotspots_csv
+from ..decision.situation_interpreter import SituationInterpreter
+from ..decision.problem_decomposer import ProblemDecomposer
+from ..decision.priority_arbiter import PriorityArbiter
+from ..decision.route_selector import RouteSelector
+from ..decision.intervention_planner import InterventionPlanner
+from ..decision.validator import Validator
+from ..decision.decision_memory import DecisionMemory
 
 Mode = Literal["traffic", "safety", "logistics", "gateway", "event"]
 ScenarioName = Literal[
@@ -100,6 +107,10 @@ class MobilityDispatchProblem:
     discrete_ratio: float
     horizon_steps: int
     metadata: Dict[str, Any] = field(default_factory=dict)
+    situation_type: str = ""
+    urgency: str = "low"
+    dominant_objective: str = ""
+    subproblem_type: str = ""
 
 
 @dataclass
@@ -132,6 +143,15 @@ class MobilityExecRecord:
     fallback_triggered: bool
     fallback_reasons: List[str]
     route_reason: str
+    situation_type: str = ""
+    dominant_objective: str = ""
+    subproblem_type: str = ""
+    recommended_action: str = ""
+    action_priority: str = ""
+    responsible_layer: str = ""
+    expected_impact: str = ""
+    validation_status: str = ""
+    expected_value_of_hybrid: float = 0.0
     complexity_score: float
     discrete_ratio: float
     intersection_hotspot: str = ""
@@ -287,34 +307,28 @@ class MobilityHybridOrchestrator:
     def __init__(self, seed: int = 42):
         self.classical = ClassicalMobilitySolver()
         self.quantum = MockQuantumMobilitySolver(seed=seed)
+        self.route_selector = RouteSelector()
 
-    def choose_route(self, problem: MobilityDispatchProblem) -> Tuple[Route, str]:
-        event = problem.metadata.get("active_event")
-        risk = float(problem.metadata.get("risk_score", 0.0))
-        bunching = float(problem.metadata.get("bus_bunching_index", 0.0))
-        curb_pressure = float(problem.metadata.get("curb_pressure_index", 0.0))
-        gateway_pressure = float(problem.metadata.get("gateway_delay_index", 0.0))
-        if problem.mode == "safety" and (risk > 0.58 or event in {"school_peak", "incident"}):
-            return "CLASSICAL", "Classical selected because the step is in immediate safety protection mode."
-        if problem.complexity_score < 4.7 or problem.discrete_ratio < 0.40:
-            return "CLASSICAL", "Classical selected because the decision space is still limited."
-        if event in {"delivery_wave", "illegal_curb_occupation", "gateway_surge", "event_release", "bus_bunching"}:
-            return "QUANTUM", "Quantum selected because the step combines multiple discrete urban control actions."
-        if problem.mode == "logistics" and curb_pressure > 0.52:
-            return "QUANTUM", "Quantum selected because curbside allocation and enforcement are under high pressure."
-        if problem.mode == "gateway" and gateway_pressure > 0.52:
-            return "QUANTUM", "Quantum selected because access coordination across multiple resources is required."
-        if problem.mode == "traffic" and bunching > 0.30 and problem.complexity_score > 5.3:
-            return "QUANTUM", "Quantum selected because corridor coordination and bus priority conflict across several actions."
-        return "CLASSICAL", "Classical selected because the step remains manageable with deterministic coordination."
+    def choose_route(self, state: Dict[str, Any], problem: MobilityDispatchProblem):
+        problem_view = {
+            "dominant_subproblem": problem.subproblem_type,
+            "complexity_score": problem.complexity_score,
+            "discrete_ratio": problem.discrete_ratio,
+            "urgency": problem.urgency,
+        }
+        return self.route_selector.choose_route(state, problem_view)
 
     def solve(self, state: Dict[str, Any], problem: MobilityDispatchProblem) -> Dict[str, Any]:
-        route, reason = self.choose_route(problem)
+        route_decision = self.choose_route(state, problem)
+        route = route_decision.route
+        reason = route_decision.route_reason
+
         if route == "CLASSICAL":
             dispatch, breakdown, confidence = self.classical.solve(state, problem)
             return {
                 "route": "CLASSICAL",
                 "route_reason": reason,
+                "expected_value_of_hybrid": route_decision.expected_value_of_hybrid,
                 "dispatch": dispatch,
                 "objective_breakdown": breakdown,
                 "confidence": confidence,
@@ -325,23 +339,29 @@ class MobilityHybridOrchestrator:
                 "qre_json": None,
                 "result_json": None,
             }
+
         dispatch, breakdown, confidence, qre, result = self.quantum.solve(state, problem)
+
         exec_ms = int(result["backend"]["queue_ms"] + result["backend"]["exec_ms"])
         latency_limit_ms = 1100 if problem.mode in {"gateway", "event"} else 900
         latency_breach = exec_ms > latency_limit_ms
+
         fallback_reasons: List[str] = []
         fallback_triggered = False
+
         if latency_breach:
             fallback_triggered = True
             fallback_reasons.append("SLA_BREACH")
         if confidence < 0.73:
             fallback_triggered = True
             fallback_reasons.append("LOW_CONFIDENCE")
+
         if fallback_triggered:
             dispatch, breakdown, confidence = self.classical.solve(state, problem)
             return {
                 "route": "FALLBACK_CLASSICAL",
                 "route_reason": "Fallback to classical because the hybrid attempt breached SLA or confidence constraints.",
+                "expected_value_of_hybrid": route_decision.expected_value_of_hybrid,
                 "dispatch": dispatch,
                 "objective_breakdown": breakdown,
                 "confidence": confidence,
@@ -352,9 +372,11 @@ class MobilityHybridOrchestrator:
                 "qre_json": json.dumps(qre, ensure_ascii=False),
                 "result_json": json.dumps(result, ensure_ascii=False),
             }
+
         return {
             "route": "QUANTUM",
             "route_reason": reason,
+            "expected_value_of_hybrid": route_decision.expected_value_of_hybrid,
             "dispatch": dispatch,
             "objective_breakdown": breakdown,
             "confidence": confidence,
@@ -667,6 +689,7 @@ class MobilityRuntime:
             "gateway_surge_flag": active_event == "gateway_surge",
         }
 
+    
     def build_problem(self, state: Dict[str, Any], ctx: ScenarioContext) -> MobilityDispatchProblem:
         discrete_vars = 8
         continuous_vars = 2
@@ -687,6 +710,12 @@ class MobilityRuntime:
         mode_bonus = {"traffic": 0.7, "safety": 0.4, "logistics": 1.0, "gateway": 1.0, "event": 1.2}[ctx.mode]
         complexity = discrete_vars * 0.55 + continuous_vars * 0.15 + event_bonus + coupling_bonus + mode_bonus
         discrete_ratio = discrete_vars / max(discrete_vars + continuous_vars, 1)
+
+        situation = self.situation_interpreter.interpret(state)
+        subproblems = self.problem_decomposer.decompose(state, situation)
+        arbitration = self.priority_arbiter.arbitrate(state, situation, subproblems)
+        dominant_subproblem = arbitration["dominant_subproblem"]
+
         constraints = {
             "network_speed_index": state["network_speed_index"],
             "corridor_reliability_index": state["corridor_reliability_index"],
@@ -696,11 +725,11 @@ class MobilityRuntime:
             "gateway_delay_index": state["gateway_delay_index"],
         }
         objective_terms = {
-            "delay_penalty_weight": 1.0,
-            "bunching_penalty_weight": 1.0,
-            "risk_penalty_weight": 1.2,
-            "curb_penalty_weight": 0.9,
-            "gateway_penalty_weight": 0.8,
+            "delay_penalty_weight": arbitration["objective_weights"]["delay"],
+            "bunching_penalty_weight": arbitration["objective_weights"]["transit"],
+            "risk_penalty_weight": arbitration["objective_weights"]["risk"],
+            "curb_penalty_weight": arbitration["objective_weights"]["logistics"],
+            "gateway_penalty_weight": arbitration["objective_weights"]["gateway"],
         }
         metadata = {
             "active_event": state["active_event"],
@@ -719,6 +748,8 @@ class MobilityRuntime:
             "bus_corridor_hotspot": state["bus_corridor_hotspot"],
             "curb_zone_hotspot": state["curb_zone_hotspot"],
             "risk_hotspot_name": state["risk_hotspot_name"],
+            "subproblems": [sp.subproblem_type for sp in subproblems],
+            "situation_notes": situation.notes,
         }
         return MobilityDispatchProblem(
             step_id=self.step_id,
@@ -731,17 +762,15 @@ class MobilityRuntime:
             discrete_ratio=discrete_ratio,
             horizon_steps=12,
             metadata=metadata,
+            situation_type=situation.situation_type,
+            urgency=situation.urgency,
+            dominant_objective=situation.dominant_objective,
+            subproblem_type=dominant_subproblem,
         )
 
     def validate_dispatch(self, dispatch: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
-        dispatch = dict(dispatch)
-        dispatch["bus_priority_level"] = int(np.clip(dispatch.get("bus_priority_level", 1), 0, 3))
-        dispatch["signal_plan_id"] = int(np.clip(dispatch.get("signal_plan_id", 1), 0, 3))
-        dispatch["curb_slot_policy"] = int(np.clip(dispatch.get("curb_slot_policy", 1), 0, 2))
-        dispatch["enforcement_level"] = int(np.clip(dispatch.get("enforcement_level", 1), 0, 2))
-        dispatch["ped_protection_mode"] = int(np.clip(dispatch.get("ped_protection_mode", 0), 0, 1))
-        dispatch["speed_mitigation_mode"] = int(np.clip(dispatch.get("speed_mitigation_mode", 0), 0, 1))
-        return dispatch
+        result = self.validator.validate(state, dispatch)
+        return result.dispatch
 
     def apply_dispatch(self, dispatch: Dict[str, Any], dt_h: float) -> None:
         self.twins["intersection"].apply_dispatch(dispatch, dt_h)
@@ -750,15 +779,23 @@ class MobilityRuntime:
         self.twins["curb_zone"].apply_dispatch(dispatch, dt_h)
         self.twins["risk_hotspot"].apply_dispatch(dispatch, dt_h)
 
-    def compute_record(self, state: Dict[str, Any], decision: Dict[str, Any], problem: MobilityDispatchProblem) -> MobilityExecRecord:
+    def compute_record(
+        self,
+        state: Dict[str, Any],
+        decision: Dict[str, Any],
+        problem: MobilityDispatchProblem,
+        intervention_plan,
+        validation_result,
+    ) -> MobilityExecRecord:
         step_operational_score = (
-            0.30 * state["network_speed_index"] +
-            0.20 * state["corridor_reliability_index"] +
-            0.15 * (1.0 - state["bus_bunching_index"]) +
-            0.15 * (1.0 - state["curb_pressure_index"]) +
-            0.20 * (1.0 - state["risk_score"])
+            0.30 * state["network_speed_index"]
+            + 0.20 * state["corridor_reliability_index"]
+            + 0.15 * (1.0 - state["bus_bunching_index"])
+            + 0.15 * (1.0 - state["curb_pressure_index"])
+            + 0.20 * (1.0 - state["risk_score"])
         )
         self.cumulative_operational_score += step_operational_score
+
         return MobilityExecRecord(
             step_id=self.step_id,
             ts=utc_now_iso(),
@@ -788,6 +825,15 @@ class MobilityRuntime:
             fallback_triggered=decision["fallback_triggered"],
             fallback_reasons=decision["fallback_reasons"],
             route_reason=decision["route_reason"],
+            situation_type=problem.situation_type,
+            dominant_objective=problem.dominant_objective,
+            subproblem_type=problem.subproblem_type,
+            recommended_action=intervention_plan.action,
+            action_priority=intervention_plan.action_priority,
+            responsible_layer=intervention_plan.responsible_layer,
+            expected_impact=intervention_plan.expected_impact,
+            validation_status=validation_result.validation_status,
+            expected_value_of_hybrid=decision.get("expected_value_of_hybrid", 0.0),
             complexity_score=problem.complexity_score,
             discrete_ratio=problem.discrete_ratio,
             intersection_hotspot=state["intersection_hotspot"],
@@ -812,14 +858,33 @@ class MobilityRuntime:
         state = self.aggregate_state(ctx)
         problem = self.build_problem(state, ctx)
         decision = self.orchestrator.solve(state, problem)
-        dispatch = self.validate_dispatch(decision["dispatch"], state)
+
+        intervention_plan = self.intervention_planner.plan(
+            state=state,
+            dominant_subproblem=problem.subproblem_type,
+            route=decision["route"],
+        )
+        dispatch = {**decision["dispatch"], **intervention_plan.dispatch_overrides}
+        validation_result = self.validator.validate(state, dispatch)
+        dispatch = validation_result.dispatch
+
         decision["dispatch"] = dispatch
         self.apply_dispatch(dispatch, dt_h)
-        record = self.compute_record(state, decision, problem)
+        record = self.compute_record(state, decision, problem, intervention_plan, validation_result)
         self.records.append(record)
+        self.decision_memory.remember(
+            {
+                "step_id": self.step_id,
+                "recommended_action": intervention_plan.action,
+                "decision_route": decision["route"],
+                "subproblem_type": problem.subproblem_type,
+                "primary_hotspot_name": state["primary_hotspot_name"],
+            }
+        )
         return record
 
     def dataframe(self) -> pd.DataFrame:
+
         return pd.DataFrame([asdict(r) for r in self.records])
 
     def latest_state(self) -> Dict[str, Any]:

@@ -24,3 +24,15 @@ python -m streamlit run app.py
 ## Sprint 1 structured layout
 
 This repository has been reorganized to prepare a modular architecture under `src/mobility_os/` while keeping the application working through a compatibility wrapper in the project root.
+
+
+## Sprint 2
+
+This structured version adds a first modular decision stack:
+- situation interpreter
+- problem decomposer
+- priority arbiter
+- route selector
+- intervention planner
+- validator
+- decision memory

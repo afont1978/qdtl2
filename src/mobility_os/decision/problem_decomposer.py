@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List
+
+from .situation_interpreter import SituationSummary
+
+
+@dataclass
+class Subproblem:
+    subproblem_type: str
+    weight: float
+    explanation: str
+
+
+class ProblemDecomposer:
+    """
+    Splits a mobility situation into one or more concrete optimization/control
+    subproblems. The strongest one becomes the dominant subproblem.
+    """
+
+    def decompose(self, state: Dict[str, Any], situation: SituationSummary) -> List[Subproblem]:
+        active_event = state.get("active_event")
+        subproblems: List[Subproblem] = []
+
+        if situation.situation_type == "safety_protection":
+            subproblems.append(Subproblem(
+                "pedestrian_protection_problem",
+                1.0,
+                "Protect vulnerable users with immediate signal and calming measures."
+            ))
+            if active_event == "incident":
+                subproblems.append(Subproblem(
+                    "incident_response_portfolio_problem",
+                    0.92,
+                    "Coordinate diversion, signal protection and safety actions around the incident."
+                ))
+
+        if situation.situation_type in {"network_congestion", "transit_reliability"} or state.get("coordination_flag", False):
+            subproblems.append(Subproblem(
+                "signal_coordination_problem",
+                0.82,
+                "Coordinate signal plans and offsets to improve corridor performance."
+            ))
+
+        if state.get("bus_bunching_index", 0.0) >= 0.28:
+            subproblems.append(Subproblem(
+                "bus_priority_problem",
+                0.86,
+                "Improve bus headway regularity using tactical priority and holding."
+            ))
+
+        if situation.situation_type == "logistics_pressure" or state.get("logistics_pressure_flag", False):
+            subproblems.append(Subproblem(
+                "curb_allocation_problem",
+                0.88,
+                "Reallocate curbside rules and enforcement under logistics pressure."
+            ))
+            subproblems.append(Subproblem(
+                "delivery_slot_problem",
+                0.78,
+                "Sequence urban deliveries to reduce curb conflict and queueing."
+            ))
+
+        if situation.situation_type == "gateway_coordination":
+            subproblems.append(Subproblem(
+                "gateway_resource_problem",
+                0.90,
+                "Coordinate gateway inflow, staging and access metering."
+            ))
+            subproblems.append(Subproblem(
+                "multimodal_redispatch_problem",
+                0.76,
+                "Rebalance arrivals across modes and surrounding corridors."
+            ))
+
+        if active_event == "event_release":
+            subproblems.append(Subproblem(
+                "event_release_rebalancing_problem",
+                0.88,
+                "Disperse post-event demand through tactical multimodal measures."
+            ))
+
+        if not subproblems:
+            subproblems.append(Subproblem(
+                "local_tactical_adjustment",
+                0.55,
+                "Apply limited deterministic adjustment to maintain service quality."
+            ))
+
+        subproblems.sort(key=lambda sp: sp.weight, reverse=True)
+        return subproblems
