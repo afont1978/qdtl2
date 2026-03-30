@@ -1,0 +1,452 @@
+{
+  "version": "2.0",
+  "description": "High-complexity scenario library for the Barcelona Mobility Control Room synthetic city engine.",
+  "scenarios": [
+    {
+      "id": "corridor_congestion_multi_corridor",
+      "title": "Multi-corridor peak congestion with bus degradation",
+      "complexity": "high",
+      "modes": [
+        "traffic",
+        "transit"
+      ],
+      "primary_hotspots": [
+        "Plaça de les Glòries Catalanes",
+        "Plaça d'Espanya",
+        "Plaça de Catalunya / Ronda Universitat"
+      ],
+      "time_profile": "weekday_am_peak",
+      "trigger_events": [
+        "demand_spike",
+        "bus_bunching"
+      ],
+      "disturbances": {
+        "corridor_flow_multiplier": 1.35,
+        "bus_headway_pressure_add": 0.25,
+        "ped_flow_multiplier": 1.15
+      },
+      "operational_goal": "Stabilize corridor travel times while preserving bus regularity and keeping pedestrian delay within tolerance.",
+      "expected_subproblems": [
+        "signal_coordination_problem",
+        "bus_priority_problem",
+        "multimodal_redispatch_problem"
+      ],
+      "recommended_interventions": [
+        "activate coordinated signal plan",
+        "increase bus priority level",
+        "selective diversion on overloaded arms"
+      ],
+      "kpis": [
+        "network_speed_index",
+        "corridor_reliability_index",
+        "bus_bunching_index",
+        "pedestrian_wait_s"
+      ]
+    },
+    {
+      "id": "school_peak_rain_visibility",
+      "title": "School-area safety stress under rain and low visibility",
+      "complexity": "high",
+      "modes": [
+        "safety",
+        "traffic"
+      ],
+      "primary_hotspots": [
+        "Plaça de Catalunya / Ronda Universitat",
+        "Plaça de les Glòries Catalanes"
+      ],
+      "time_profile": "school_entry_window",
+      "trigger_events": [
+        "school_peak",
+        "rain_event"
+      ],
+      "disturbances": {
+        "ped_flow_multiplier": 1.45,
+        "bike_flow_multiplier": 1.2,
+        "rain_intensity": 0.55,
+        "visibility": 0.65
+      },
+      "operational_goal": "Reduce vulnerable-user exposure and prevent near-miss escalation while containing traffic spillback.",
+      "expected_subproblems": [
+        "pedestrian_protection_problem",
+        "signal_coordination_problem",
+        "risk_mitigation_problem"
+      ],
+      "recommended_interventions": [
+        "activate pedestrian protection mode",
+        "speed mitigation around hotspot",
+        "temporary signal safety plan"
+      ],
+      "kpis": [
+        "risk_burden",
+        "pedestrian_risk",
+        "near_miss_city_index",
+        "network_speed_index"
+      ]
+    },
+    {
+      "id": "urban_logistics_black_friday",
+      "title": "Black-Friday-style urban logistics and curbside saturation",
+      "complexity": "high",
+      "modes": [
+        "logistics",
+        "traffic"
+      ],
+      "primary_hotspots": [
+        "Plaça Cerdà / Passeig de la Zona Franca",
+        "Plaça de Catalunya / Ronda Universitat",
+        "Paral·lel / Port Vell / salida 21 Ronda Litoral"
+      ],
+      "time_profile": "weekday_midday",
+      "trigger_events": [
+        "delivery_wave",
+        "illegal_curb_occupation"
+      ],
+      "disturbances": {
+        "delivery_pressure_add": 0.4,
+        "illegal_parking_pressure_add": 0.35,
+        "pickup_dropoff_pressure_add": 0.2
+      },
+      "operational_goal": "Restore curbside efficiency, reduce illegal occupancy, and prevent logistics spillover into bus and pedestrian space.",
+      "expected_subproblems": [
+        "curb_allocation_problem",
+        "delivery_slot_problem",
+        "incident_response_portfolio_problem"
+      ],
+      "recommended_interventions": [
+        "reallocate curb slots",
+        "increase enforcement level",
+        "open temporary access windows for prioritized deliveries"
+      ],
+      "kpis": [
+        "curb_pressure_index",
+        "dum_compliance_rate",
+        "delivery_queue",
+        "bus_bunching_index"
+      ]
+    },
+    {
+      "id": "airport_departure_bank_stress",
+      "title": "Airport departure bank stress with curbside and access overload",
+      "complexity": "high",
+      "modes": [
+        "gateway",
+        "traffic",
+        "logistics"
+      ],
+      "primary_hotspots": [
+        "Aeropuerto Josep Tarradellas BCN-El Prat T1",
+        "Aeropuerto Josep Tarradellas BCN-El Prat T2",
+        "Plaça de Catalunya / Ronda Universitat"
+      ],
+      "time_profile": "departure_bank",
+      "trigger_events": [
+        "gateway_surge",
+        "pickup_dropoff_spike"
+      ],
+      "disturbances": {
+        "gateway_surge_add": 0.5,
+        "pickup_dropoff_pressure_add": 0.35,
+        "corridor_flow_multiplier": 1.15
+      },
+      "operational_goal": "Contain gateway delays and curbside overload while maintaining reliable airport access and urban bus performance.",
+      "expected_subproblems": [
+        "gateway_resource_problem",
+        "curb_allocation_problem",
+        "multimodal_redispatch_problem"
+      ],
+      "recommended_interventions": [
+        "activate gateway metering",
+        "separate taxi/VTC staging",
+        "prioritize airport transit connection"
+      ],
+      "kpis": [
+        "gateway_delay_index",
+        "curb_pressure_index",
+        "network_speed_index",
+        "bus_regularilty_score"
+      ]
+    },
+    {
+      "id": "port_truck_convoy_pressure",
+      "title": "Port truck convoy pressure with logistics spillback",
+      "complexity": "high",
+      "modes": [
+        "gateway",
+        "logistics",
+        "traffic"
+      ],
+      "primary_hotspots": [
+        "Ronda del Port VI / Carrer 3 (Puertas 29-30)",
+        "Plaça Cerdà / Passeig de la Zona Franca",
+        "Paral·lel / Port Vell / salida 21 Ronda Litoral"
+      ],
+      "time_profile": "weekday_logistics_peak",
+      "trigger_events": [
+        "gateway_surge",
+        "delivery_wave"
+      ],
+      "disturbances": {
+        "gateway_surge_add": 0.45,
+        "corridor_flow_multiplier": 1.2,
+        "delivery_pressure_add": 0.25
+      },
+      "operational_goal": "Prevent truck-access queues from propagating into the urban road network and curbside system.",
+      "expected_subproblems": [
+        "gateway_resource_problem",
+        "signal_coordination_problem",
+        "curb_allocation_problem"
+      ],
+      "recommended_interventions": [
+        "activate truck metering strategy",
+        "protect logistics corridor progression",
+        "deconflict urban curbside use near access roads"
+      ],
+      "kpis": [
+        "gateway_delay_index",
+        "network_speed_index",
+        "delivery_queue",
+        "city_pressure_score"
+      ]
+    },
+    {
+      "id": "stadium_event_release_plus_rain",
+      "title": "Large event release under rain with multimodal overflow",
+      "complexity": "very_high",
+      "modes": [
+        "event",
+        "traffic",
+        "transit",
+        "safety"
+      ],
+      "primary_hotspots": [
+        "Plaça d'Espanya",
+        "Sants Estació / Plaça dels Països Catalans",
+        "Plaça de Catalunya / Ronda Universitat"
+      ],
+      "time_profile": "event_release_window",
+      "trigger_events": [
+        "event_release",
+        "rain_event",
+        "bus_bunching"
+      ],
+      "disturbances": {
+        "corridor_flow_multiplier": 1.3,
+        "ped_flow_multiplier": 1.5,
+        "bus_headway_pressure_add": 0.3,
+        "rain_intensity": 0.45,
+        "visibility": 0.72
+      },
+      "operational_goal": "Absorb multimodal release demand without triggering unsafe crowd-traffic interaction or network-wide collapse.",
+      "expected_subproblems": [
+        "event_release_rebalancing_problem",
+        "bus_priority_problem",
+        "pedestrian_protection_problem",
+        "signal_coordination_problem"
+      ],
+      "recommended_interventions": [
+        "activate event egress plan",
+        "reinforce bus priority and holding strategy",
+        "deploy pedestrian protection around interchange"
+      ],
+      "kpis": [
+        "station_pressure_index",
+        "bus_bunching_index",
+        "risk_burden",
+        "corridor_reliability_index"
+      ]
+    },
+    {
+      "id": "city_centre_tourism_weekend",
+      "title": "Weekend tourism overload in the city centre",
+      "complexity": "high",
+      "modes": [
+        "traffic",
+        "safety",
+        "logistics"
+      ],
+      "primary_hotspots": [
+        "Plaça de Catalunya / Ronda Universitat",
+        "Paral·lel / Port Vell / salida 21 Ronda Litoral",
+        "Moll Adossat / Port Creuers (Puerta 2)"
+      ],
+      "time_profile": "weekend_midday",
+      "trigger_events": [
+        "tourism_pressure",
+        "pickup_dropoff_spike"
+      ],
+      "disturbances": {
+        "ped_flow_multiplier": 1.4,
+        "pickup_dropoff_pressure_add": 0.28,
+        "gateway_surge_add": 0.2
+      },
+      "operational_goal": "Balance pedestrian safety, curbside usage and visitor access without degrading the core transit network.",
+      "expected_subproblems": [
+        "curb_allocation_problem",
+        "pedestrian_protection_problem",
+        "multimodal_redispatch_problem"
+      ],
+      "recommended_interventions": [
+        "tighten curbside rules in core tourist areas",
+        "promote transit-first access pattern",
+        "protect pedestrian crossings"
+      ],
+      "kpis": [
+        "pedestrian_risk",
+        "curb_pressure_index",
+        "gateway_delay_index",
+        "network_speed_index"
+      ]
+    },
+    {
+      "id": "works_plus_incident_chain",
+      "title": "Road works plus incident chain reaction",
+      "complexity": "very_high",
+      "modes": [
+        "traffic",
+        "gateway",
+        "transit"
+      ],
+      "primary_hotspots": [
+        "Plaça de les Glòries Catalanes",
+        "Plaça d'Espanya",
+        "Plaça Cerdà / Passeig de la Zona Franca"
+      ],
+      "time_profile": "weekday_pm_peak",
+      "trigger_events": [
+        "roadworks",
+        "incident",
+        "bus_bunching"
+      ],
+      "disturbances": {
+        "corridor_flow_multiplier": 1.18,
+        "capacity_reduction": 0.25,
+        "bus_headway_pressure_add": 0.22
+      },
+      "operational_goal": "Prevent local capacity loss from cascading into network-wide congestion and transit degradation.",
+      "expected_subproblems": [
+        "signal_coordination_problem",
+        "incident_response_portfolio_problem",
+        "bus_priority_problem"
+      ],
+      "recommended_interventions": [
+        "activate temporary signal coordination package",
+        "deploy diversion plan",
+        "protect bus corridor continuity"
+      ],
+      "kpis": [
+        "network_speed_index",
+        "corridor_reliability_index",
+        "bus_bunching_index",
+        "city_pressure_score"
+      ]
+    },
+    {
+      "id": "multimodal_hub_systemic_pressure",
+      "title": "Systemic pressure across intermodal hubs",
+      "complexity": "very_high",
+      "modes": [
+        "transit",
+        "traffic",
+        "event",
+        "gateway"
+      ],
+      "primary_hotspots": [
+        "Plaça d'Espanya",
+        "Plaça de les Glòries Catalanes",
+        "Sants Estació / Plaça dels Països Catalans",
+        "Plaça de Catalunya / Ronda Universitat"
+      ],
+      "time_profile": "mixed_peak",
+      "trigger_events": [
+        "demand_spike",
+        "bus_bunching",
+        "gateway_surge"
+      ],
+      "disturbances": {
+        "corridor_flow_multiplier": 1.22,
+        "ped_flow_multiplier": 1.2,
+        "bus_headway_pressure_add": 0.25,
+        "gateway_surge_add": 0.25
+      },
+      "operational_goal": "Avoid synchronized degradation across Barcelona’s main intermodal nodes.",
+      "expected_subproblems": [
+        "multimodal_redispatch_problem",
+        "signal_coordination_problem",
+        "gateway_resource_problem",
+        "bus_priority_problem"
+      ],
+      "recommended_interventions": [
+        "coordinate hub-level control package",
+        "stagger transit priority",
+        "re-route demand across hubs"
+      ],
+      "kpis": [
+        "station_pressure_index",
+        "corridor_reliability_index",
+        "bus_bunching_index",
+        "gateway_delay_index"
+      ]
+    },
+    {
+      "id": "compound_extreme_day",
+      "title": "Compound extreme day: rain + event + logistics + gateway stress",
+      "complexity": "extreme",
+      "modes": [
+        "traffic",
+        "transit",
+        "safety",
+        "logistics",
+        "gateway",
+        "event"
+      ],
+      "primary_hotspots": [
+        "Plaça d'Espanya",
+        "Plaça de les Glòries Catalanes",
+        "Plaça Cerdà / Passeig de la Zona Franca",
+        "Aeropuerto Josep Tarradellas BCN-El Prat T1",
+        "Ronda del Port VI / Carrer 3 (Puertas 29-30)"
+      ],
+      "time_profile": "compound_peak",
+      "trigger_events": [
+        "rain_event",
+        "event_release",
+        "delivery_wave",
+        "gateway_surge",
+        "bus_bunching"
+      ],
+      "disturbances": {
+        "corridor_flow_multiplier": 1.28,
+        "ped_flow_multiplier": 1.35,
+        "delivery_pressure_add": 0.35,
+        "illegal_parking_pressure_add": 0.2,
+        "gateway_surge_add": 0.4,
+        "bus_headway_pressure_add": 0.28,
+        "rain_intensity": 0.6,
+        "visibility": 0.62
+      },
+      "operational_goal": "Sustain minimum acceptable service across all critical mobility subsystems under compound stress.",
+      "expected_subproblems": [
+        "multimodal_redispatch_problem",
+        "incident_response_portfolio_problem",
+        "gateway_resource_problem",
+        "curb_allocation_problem",
+        "pedestrian_protection_problem"
+      ],
+      "recommended_interventions": [
+        "activate compound crisis mobility plan",
+        "prioritize safety and critical transit continuity",
+        "tighten logistics access control",
+        "meter gateway flows"
+      ],
+      "kpis": [
+        "city_operational_score",
+        "risk_burden",
+        "bus_bunching_index",
+        "gateway_delay_index",
+        "curb_pressure_index",
+        "network_speed_index"
+      ]
+    }
+  ]
+}
